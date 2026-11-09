@@ -104,4 +104,40 @@ the local fixture uses a disposable loopback connection without TLS.
 Each request opens a connection with a three-second connect/statement timeout and
 two-second lock timeout. Application pooling and capacity measurements are deferred.
 No queue, model service, Azure resource or deployment is created by these commands.
-Financial document consistency checking with traceable evidence, asynchronous processing and evaluated AI workflows.
+
+## Hosted validation and publication
+
+`.github/workflows/publish.yml` composes the existing shared Docker workflow and
+Atlas actions for one API image and the migration directory. It runs on PRs,
+`main` pushes and manual dispatches. It checks out the exact PR head or selected
+commit, runs the existing HTTP/SQL acceptance tests, and validates migration
+checksums/replay. Trusted publication also runs native migration lint/constraint
+tests through `atlas.ci.hcl`, using disposable PostgreSQL only.
+
+Same-repository PRs and `main` can publish. Fork PRs validate and build without
+publishing credentials; paid Atlas lint/constraint steps are skipped for forks.
+Manual dispatch from a non-main branch is build/validation only. Publishing uses
+the existing organization `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID` and `ATLAS_CLOUD_TOKEN` secrets. Azure authentication is
+OIDC, scoped to the image job; no runtime database credentials enter CI.
+Missing credentials or incompatible Atlas repository permissions fail the run.
+
+The pipeline ensures the application's `financial-document-consistency` Atlas
+migration repository through the existing shared action, which verifies its
+type/driver without modifying incompatible repositories. PR publication uses the
+full source SHA tag with `latest: false`; only `main` publication advances the
+main Registry baseline. Images use `portfolio/financial-document-consistency`
+with distinct source-derived PR/main tags. Artifact publication is not deployment.
+
+After both publishers succeed, the final job validates matching source identities,
+image digest and local migration checksum. It rechecks the live PR/main head
+immediately before uploading `artifacts.json`, retained for seven days. The record
+contains source repository/SHA, workflow run/attempt/reference/event, API image
+tag/digest/reference, and migration repository/tag/URL/`atlas.sum` SHA-256.
+A failed or partial publisher produces no complete handoff record.
+
+Freshness checking and uploading are not atomic. A later deployment consumer
+must independently verify the successful authorized workflow attempt, current
+source, image digest and migration content before selecting the artifacts.
+Source-named tags alone are not registry-enforced immutability. No Helm release,
+application registration, live database or public route is created here.

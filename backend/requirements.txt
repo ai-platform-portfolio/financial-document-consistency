@@ -1,0 +1,29 @@
+# Direct dependencies
+fastapi==0.118.0
+uvicorn==0.37.0
+psycopg[binary]==3.3.6
+azure-identity==1.27.0
+
+# Locked transitive dependencies for Python 3.12
+annotated-types==0.8.0
+anyio==4.15.1
+azure-core==1.41.0
+certifi==2026.10.23
+cffi==2.1.1
+charset-normalizer==3.5.2
+click==8.5.0
+cryptography==50.0.2
+h11==0.16.0
+idna==3.20
+msal==1.39.0
+msal-extensions==1.3.1
+psycopg-binary==3.3.6
+pycparser==3.12
+pydantic==2.14.2
+pydantic-core==2.50.2
+PyJWT==2.15.1
+requests==2.34.2
+starlette==0.48.0
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+urllib3==2.8.0

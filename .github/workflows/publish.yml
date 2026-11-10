@@ -17,7 +17,7 @@ concurrency:
 env:
   ATLAS_NO_ANON_TELEMETRY: 'true'
   ATLAS_NO_UPDATE_NOTIFIER: 'true'
-  APPLICATION_CHART_REVISION: 25e44b5db329e86c1901e94a6f659cbe298f7b24 # pipeline chart PR37; merge shared dependency first
+  APPLICATION_CHART_REVISION: c1e8375398311dbe3adfdda7a87b80023870b1b7 # pipeline chart PR37; merge shared dependency first
 
 jobs:
   source:

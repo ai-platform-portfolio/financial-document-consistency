@@ -333,3 +333,4 @@ samples for the preview database. Treat the small burst as a comparison of the
 two configurations and use the local fixture for larger row counts.
 
 <!-- AI-227 disposable preview isolation participant a. -->
+<!-- AI-227 revision update for the disposable isolation drill. -->

@@ -311,3 +311,23 @@ idempotency/conflict, persisted findings and evidence/model usage. Platform
 acceptance separately verifies actual workload identities, cross-preview Blob
 read/write denials, source/image provenance and close-triggered resource cleanup.
 Live evidence belongs in the delivery record, not a claim inferred from CI.
+
+### Live worker scaling
+
+Use a source-matching disposable preview and a loopback-only tunnel to its API.
+The first phase creates one synthetic PDF pair and submits four independent
+reviews. Drain the queue, deploy the two-worker revision, verify both replicas,
+and reuse the pair for the second phase.
+
+```sh
+python tests/load_live.py --base-url http://127.0.0.1:18000 --workers 1 --pair-file /tmp/document-load-pair.json --live-model
+python tests/load_live.py --base-url http://127.0.0.1:18000 --workers 2 --pair-file /tmp/document-load-pair.json --live-model
+```
+
+Run each phase once. The worker argument labels the experiment. The operator
+verifies replicas and provenance separately. Stop before the second phase if
+the first fails, times out or shows throttling. The client emits review IDs,
+observed completion times, API read timings, provider attempts and token usage.
+Correlate those IDs with worker queue timing and read-only PostgreSQL activity
+samples for the preview database. Treat the small burst as a comparison of the
+two configurations and use the local fixture for larger row counts.

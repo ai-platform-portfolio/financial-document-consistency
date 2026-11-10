@@ -177,6 +177,9 @@ def main():
     mode.add_argument("--local", action="store_true")
     mode.add_argument("--base-url")
     parser.add_argument("--live-model", action="store_true")
+    parser.add_argument(
+        "--suite", choices=("baseline", "fiscal-context"), default="baseline"
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.base_url and (
@@ -186,7 +189,11 @@ def main():
     ):
         parser.error("Use an IPv4 loopback preview tunnel, --live-model and --output")
 
-    cases = json.loads(CORPUS.read_text())["heldout_documents"]
+    corpus = json.loads(CORPUS.read_text())
+    cases = corpus["heldout_documents"]
+    if args.suite == "fiscal-context":
+        known = next(case for case in cases if case["name"] == "narrative-synonym")
+        cases = [known, *corpus["fiscal_context_documents"]]
     if not 1 <= len(cases) <= MAX_CASES:
         parser.error(f"Corpus must contain one to {MAX_CASES} pairs")
     inputs = []

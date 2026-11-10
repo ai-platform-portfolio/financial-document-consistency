@@ -15,6 +15,7 @@ from processing import (
     Narrative,
     UnsupportedClaimEvidence,
     narrative_context,
+    narrative_inputs,
     validate_narrative,
     compare_claims,
     validate_claims,
@@ -132,6 +133,26 @@ class ProcessingTests(unittest.TestCase):
             self.assertTrue(
                 any(w["page"] == 2 and excerpt in w["text"] for w in windows)
             )
+
+    def test_narrative_inputs_keep_fiscal_header_context_separate(self):
+        pages = {
+            "report": [
+                "FY2025 annual report.",
+                "Gross profit as a share of sales rose.",
+            ],
+            "summary": ["FY2025 summary. Gross margin rose."],
+        }
+        inputs = narrative_inputs(pages)
+        self.assertEqual(inputs["fiscal_years"], {"report": "2025", "summary": "2025"})
+        self.assertEqual(inputs["report"][1], {"page": 2, "text": pages["report"][1]})
+        for text, expected in [
+            ("FY2024 summary. Gross margin rose.", "2024"),
+            ("FY2024 and FY2025 summary. Gross margin rose.", None),
+            ("Q1 FY2025 summary. Gross margin rose.", None),
+        ]:
+            with self.subTest(text=text):
+                result = narrative_inputs({**pages, "summary": [text]})
+                self.assertEqual(result["fiscal_years"]["summary"], expected)
 
     def test_narrative_requires_comparable_explicit_periods(self):
         narrative = Narrative(

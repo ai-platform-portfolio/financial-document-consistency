@@ -28,7 +28,7 @@ from storage import BlobStore
 from telemetry import tracer, event
 
 
-PROMPT = "financial-evidence-v3"
+PROMPT = "financial-evidence-v4"
 PROFILE = "financial-v1"
 MAX_CALLS = 12
 MAX_INPUT_BYTES = 96000
@@ -294,13 +294,13 @@ def narrative_context(pages):
     return windows or [{"page": 1, "text": pages[0][:1000]}]
 
 
-def fiscal_period(pages, evidence):
+def fiscal_period(pages, evidence=None):
     def years(text):
         return {m[1] or m[2] for m in FISCAL_YEAR.finditer(text)}
 
     # Prefer an explicit period in the cited statement. A sole document
     # period can qualify a citation without its own period.
-    text = evidence.quote if years(evidence.quote) else "\n".join(pages)
+    text = evidence.quote if evidence and years(evidence.quote) else "\n".join(pages)
     candidates = years(text)
     if len(candidates) == 1 and not AMBIGUOUS_FISCAL_PERIOD.search(text):
         return next(iter(candidates))
@@ -329,6 +329,13 @@ def validate_narrative(narrative, pages):
     return narrative
 
 
+def narrative_inputs(pages):
+    return {
+        **{kind: narrative_context(text) for kind, text in pages.items()},
+        "fiscal_years": {kind: fiscal_period(text) for kind, text in pages.items()},
+    }
+
+
 def compare_narrative(review_id, pages):
     existing = load_step(review_id, "narrative")
     if existing is not None:
@@ -337,7 +344,7 @@ def compare_narrative(review_id, pages):
         review_id,
         "narrative",
         Narrative,
-        {kind: narrative_context(text) for kind, text in pages.items()},
+        narrative_inputs(pages),
     )
     narrative = validate_narrative(narrative, pages)
     save_step(review_id, "narrative", narrative.model_dump())
@@ -411,6 +418,16 @@ def infer(review_id, step, model_type, inputs, *, repair_reason=None):
                             "In value remove grouping separators, but keep the sign and decimal. "
                             "Do not convert scale; record it separately. Omit direction-only margin as a number. "
                             + PROMPT
+                            + (
+                                " In the narrative input, fiscal_years is worker-derived "
+                                "document metadata. If a margin statement has no explicit "
+                                "period and does not refer to a different period, apply "
+                                "that document's non-null fiscal year. A margin quotation "
+                                "does not need to repeat the fiscal-year header. "
+                                "Do not assume a period from null metadata."
+                                if step == "narrative"
+                                else ""
+                            )
                             + (
                                 f" The previous extraction failed evidence validation ({repair_reason}). "
                                 + REPAIR_GUIDANCE[repair_reason]

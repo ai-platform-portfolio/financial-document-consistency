@@ -302,6 +302,10 @@ Service tunnel and submit one bounded real-model acceptance pair:
 python tests/deployed.py --base-url http://127.0.0.1:18000 --live-model --cases 3
 ```
 
+A claim that fails evidence validation gets one corrected extraction request.
+Both calls count toward the same review budget, and a second invalid result
+fails the review. Logs record the validation reason without source or model text.
+
 The deployed test writes disposable API records, checks upload retries, review
 idempotency/conflict, persisted findings and evidence/model usage. Platform
 acceptance separately verifies actual workload identities, cross-preview Blob

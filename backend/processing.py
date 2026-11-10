@@ -28,7 +28,7 @@ from storage import BlobStore
 from telemetry import tracer, event
 
 
-PROMPT = "financial-evidence-v1"
+PROMPT = "financial-evidence-v2"
 PROFILE = "financial-v1"
 MAX_CALLS = 12
 MAX_INPUT_BYTES = 96000
@@ -37,6 +37,10 @@ MAX_OUTPUT_TOKENS = 3000
 
 class TransientProcessingError(Exception):
     """Safe retry signal; provider response bodies never reach worker logs."""
+
+
+class UnsupportedClaimEvidence(ValueError):
+    """A fixed reason code, safe to record without document or model text."""
 
 
 RETRYABLE = (
@@ -102,16 +106,35 @@ def evidence_valid(evidence: Evidence, pages: list[str]) -> bool:
 def validate_claims(claims: Claims, pages: list[str]):
     for claim in claims.claims:
         numbers = re.findall(r"-?\d+(?:,\d{3})*(?:\.\d+)?", claim.evidence.quote)
-        if (
-            not evidence_valid(claim.evidence, pages)
-            or not any(
-                Decimal(n.replace(",", "")) == Decimal(claim.value) for n in numbers
-            )
-            or (claim.metric == "margin") != (claim.currency == "PCT")
-            or claim.metric == "margin"
-            and claim.scale != "units"
+        if not evidence_valid(claim.evidence, pages):
+            raise UnsupportedClaimEvidence("quote_not_on_page")
+        if not any(
+            Decimal(n.replace(",", "")) == Decimal(claim.value) for n in numbers
         ):
-            raise ValueError("Unsupported extraction evidence")
+            raise UnsupportedClaimEvidence("value_not_in_quote")
+        if (claim.metric == "margin") != (claim.currency == "PCT") or (
+            claim.metric == "margin" and claim.scale != "units"
+        ):
+            raise UnsupportedClaimEvidence("invalid_metric_units")
+
+
+def extract_claims(review_id, step, pages):
+    for repair in (False, True):
+        claims = infer(review_id, step, Claims, {"pages": pages}, repair=repair)
+        try:
+            validate_claims(claims, pages)
+        except UnsupportedClaimEvidence as exc:
+            event(
+                "review.claim_evidence_rejected",
+                review_id=review_id,
+                step=step,
+                reason=str(exc),
+                repair=repair,
+            )
+            if repair:
+                raise
+        else:
+            return claims
 
 
 def compare_claims(report: Claims, summary: Claims) -> list[dict]:
@@ -208,7 +231,7 @@ def narrative_context(pages):
     return windows or [{"page": 1, "text": pages[0][:1000]}]
 
 
-def infer(review_id, step, model_type, inputs):
+def infer(review_id, step, model_type, inputs, *, repair=False):
     """Reserve a durable attempt before the call; never hold a SQL connection during inference."""
     payload = json.dumps(inputs, ensure_ascii=False)
     size = len(payload.encode())
@@ -277,6 +300,14 @@ def infer(review_id, step, model_type, inputs):
                             "use 'unspecified' for missing qualifiers. For narrative compare only claims about margin direction; "
                             "return unresolved when evidence is insufficient. Values must appear in quoted text. "
                             + PROMPT
+                            + (
+                                " The previous extraction failed evidence validation. "
+                                "Quote a contiguous substring of the cited page exactly, including punctuation. "
+                                "Each numerical value must be explicitly present in the quote. "
+                                "Omit claims you cannot support, including direction-only margin statements."
+                                if repair
+                                else ""
+                            )
                         ),
                     },
                     {"role": "user", "content": payload},
@@ -405,8 +436,7 @@ def _process_review(review_id):
                 json.dumps(pages[kind]).encode(),
                 "application/json",
             )
-            claims[kind] = infer(review_id, kind, Claims, {"pages": pages[kind]})
-            validate_claims(claims[kind], pages[kind])
+            claims[kind] = extract_claims(review_id, kind, pages[kind])
             save_step(review_id, kind, claims[kind])
         if set(claims) != {"report", "summary"}:
             raise ValueError("Missing document pair")

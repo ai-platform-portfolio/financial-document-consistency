@@ -481,7 +481,7 @@ class IntegrationTests(unittest.TestCase):
         replacement.wait(timeout=15)
 
     def test_worker_retry_exhaustion_and_invalid_output(self):
-        for failure in ["rate", "schema"]:
+        for failure in ["rate", "schema", "evidence"]:
             with self.subTest(failure=failure):
                 review = self.verified_review()
                 worker = self.start_worker(failure=failure)
@@ -498,7 +498,26 @@ class IntegrationTests(unittest.TestCase):
                         "SELECT model_calls,worker_attempts FROM public.review_runs WHERE review_id=%s",
                         (review["id"],),
                     ).fetchone()
-                self.assertEqual(attempts, (3, 3) if failure == "rate" else (1, 1))
+                self.assertEqual(
+                    attempts,
+                    {"rate": (3, 3), "schema": (1, 1), "evidence": (2, 1)}[failure],
+                )
+
+    def test_unsupported_evidence_repair_is_counted(self):
+        review = self.verified_review()
+        worker = self.start_worker(failure="repair")
+        wait_for(
+            lambda: (
+                self.request("/api/reviews/" + review["id"])[1]["status"] == "completed"
+            )
+        )
+        worker.terminate()
+        worker.wait(timeout=15)
+        status, evidence = self.request("/api/reviews/" + review["id"] + "/evidence")
+        self.assertEqual(status, 200)
+        self.assertEqual(evidence["run"]["model_calls"], 5)
+        self.assertEqual(evidence["usage"]["known_output_tokens"], 250)
+        self.assertEqual(len(evidence["steps"]), 3)
 
     def test_backpressure_rolls_back_unaccepted_work(self):
         report = self.upload(
@@ -636,6 +655,12 @@ def fixture_runtime():
                 }
                 if value is None:
                     output = {"claims": []}
+                elif failure == "evidence" or (
+                    failure == "repair"
+                    and "previous extraction failed"
+                    not in kwargs["messages"][0]["content"]
+                ):
+                    output["claims"][0]["evidence"]["quote"] = "Unsupported paraphrase"
             else:
                 report_text = inputs["report"][0]["text"]
                 summary_text = inputs["summary"][0]["text"]

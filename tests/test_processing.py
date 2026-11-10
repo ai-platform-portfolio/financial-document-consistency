@@ -12,6 +12,10 @@ from extraction import extract_pages
 from processing import (
     Claims,
     Evidence,
+    Narrative,
+    UnsupportedClaimEvidence,
+    narrative_context,
+    validate_narrative,
     compare_claims,
     validate_claims,
     evidence_valid,
@@ -95,6 +99,68 @@ class ProcessingTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             Claims.model_validate({"claims": [], "injected": "execute code"})
+
+    def test_numeric_quote_cannot_split_a_source_token(self):
+        for page, quote, value in [
+            ("Revenue GBP 82,000.", "Revenue GBP 82", "82"),
+            ("Revenue GBP 82.50.", "Revenue GBP 82", "82"),
+            ("Change was -42.", "42", "42"),
+            ("Revenue GBP 182.", "82", "82"),
+        ]:
+            with self.subTest(page=page):
+                result = Claims(
+                    claims=[claim(value=value, evidence={"page": 1, "quote": quote})]
+                )
+                with self.assertRaisesRegex(
+                    UnsupportedClaimEvidence, "value_not_in_quote"
+                ):
+                    validate_claims(result, [page])
+        for value, quote in [("82000", "GBP 82,000"), ("-42", "−42")]:
+            result = Claims(
+                claims=[claim(value=value, evidence={"page": 1, "quote": quote})]
+            )
+            validate_claims(result, [f"Source: {quote}."])
+
+    def test_narrative_context_keeps_margin_synonym_on_its_page(self):
+        excerpt = "Gross profit as a share of sales climbed from 18% to 22%."
+        for padding in ["", "x" * 8000]:
+            pages = ["The following page explains the margin. " + padding, excerpt]
+            windows = narrative_context(pages)
+            self.assertLessEqual(
+                len(json.dumps(windows, ensure_ascii=False).encode()), 8000
+            )
+            self.assertTrue(
+                any(w["page"] == 2 and excerpt in w["text"] for w in windows)
+            )
+
+    def test_narrative_requires_comparable_explicit_periods(self):
+        narrative = Narrative(
+            classification="consistent",
+            explanation="Both documents say margin was stable",
+            report_evidence=Evidence(page=1, quote="Margin was stable."),
+            summary_evidence=Evidence(page=1, quote="Margin was stable."),
+        )
+        pages = {
+            "report": ["FY2025 report. Margin was stable."],
+            "summary": ["Year 2025 summary. Margin was stable."],
+        }
+        self.assertEqual(
+            validate_narrative(narrative, pages).classification, "consistent"
+        )
+        for summary in [
+            "FY2024 summary. Margin was stable.",
+            "FY2024 and FY2025 summary. Margin was stable.",
+            "Q1 FY2025 summary. Margin was stable.",
+            "FY2025/26 summary. Margin was stable.",
+            "Margin was stable.",
+        ]:
+            with self.subTest(summary=summary):
+                pages["summary"] = [summary]
+                result = validate_narrative(narrative, pages)
+                self.assertEqual(result.classification, "unresolved")
+                self.assertIn("fiscal period", result.explanation)
+        with self.assertRaisesRegex(ValueError, "Unsupported narrative evidence"):
+            validate_narrative(narrative, {**pages, "summary": ["Unrelated text"]})
 
     def test_native_sdk_structured_output_contract(self):
         import httpx2

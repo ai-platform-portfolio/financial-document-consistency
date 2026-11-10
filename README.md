@@ -243,8 +243,12 @@ the internal API, not in application logs or traces.
 The worker compares compatible entity/period/currency/scale/accounting-basis
 claims with Decimal arithmetic (absolute tolerance 0.01 normalized currency units;
 margin tolerance 0.1 percentage points). Missing/ambiguous comparators are
-unresolved. One schema-constrained narrative call checks margin direction. Exact
-quotes must occur on their cited page; schema validity does not establish truth.
+unresolved. A numeric quotation must cover the complete amount in its source
+page. If a correction still leaves unsupported numeric evidence, the worker
+records unresolved numeric coverage and continues the independent narrative
+check. Definitive narrative findings require exact quotations and the same
+identifiable fiscal year. Short documents retain all pages in the narrative
+context; longer documents use bounded windows around margin language.
 
 ## Durability and operational bounds
 
@@ -302,9 +306,9 @@ Service tunnel and submit one bounded real-model acceptance pair:
 python tests/deployed.py --base-url http://127.0.0.1:18000 --live-model --cases 3
 ```
 
-A claim that fails evidence validation gets one corrected extraction request.
-Both calls count toward the same review budget, and a second invalid result
-fails the review. Logs record the validation reason without source or model text.
+A claim that fails evidence validation gets one corrected extraction request
+with the safe rejection reason. Both calls count toward the same review budget.
+Logs record the reason without source or model text.
 
 The deployed test writes disposable API records, checks upload retries, review
 idempotency/conflict, persisted findings and evidence/model usage. Platform

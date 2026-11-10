@@ -28,11 +28,35 @@ from storage import BlobStore
 from telemetry import tracer, event
 
 
-PROMPT = "financial-evidence-v2"
+PROMPT = "financial-evidence-v3"
 PROFILE = "financial-v1"
 MAX_CALLS = 12
 MAX_INPUT_BYTES = 96000
 MAX_OUTPUT_TOKENS = 3000
+NARRATIVE_CONTEXT_BYTES = 8000
+NUMBER = re.compile(r"[-+−]?\d+(?:,\d{3})*(?:\.\d+)?")
+MARGIN_LANGUAGE = re.compile(
+    r"\bmargins?\b|\bprofit as a (?:share|percentage|proportion) of (?:sales|revenue)\b",
+    re.IGNORECASE,
+)
+FISCAL_YEAR = re.compile(
+    r"\b(?:FY\s*|(?:fiscal\s+)?year\s+)((?:19|20)\d{2})\b"
+    r"|\b((?:19|20)\d{2})(?=\s+statutory\b)",
+    re.IGNORECASE,
+)
+AMBIGUOUS_FISCAL_PERIOD = re.compile(
+    r"\b(?:q[1-4]|h[12]|quarter(?:ly)?|half[- ]year|interim)\b"
+    r"|\b(?:FY\s*|year\s+)(?:19|20)\d{2}\s*[/–-]\s*\d{2,4}\b",
+    re.IGNORECASE,
+)
+REPAIR_GUIDANCE = {
+    "quote_not_on_page": "Copy a contiguous quotation exactly from the cited page.",
+    "value_not_in_quote": (
+        "Copy a complete numeric amount from the page. Keep all digits, "
+        "signs, grouping separators and decimals in the quote."
+    ),
+    "invalid_metric_units": "Use PCT and scale units for margin only.",
+}
 
 
 class TransientProcessingError(Exception):
@@ -80,8 +104,8 @@ class Narrative(BaseModel):
     model_config = ConfigDict(extra="forbid")
     classification: Literal["consistent", "issue", "unresolved"]
     explanation: str = Field(max_length=700)
-    report_evidence: Evidence
-    summary_evidence: Evidence
+    report_evidence: Evidence | None
+    summary_evidence: Evidence | None
 
 
 CONFIG = hashlib.sha256(
@@ -99,17 +123,30 @@ CONFIG = hashlib.sha256(
 ).hexdigest()
 
 
-def evidence_valid(evidence: Evidence, pages: list[str]) -> bool:
-    return evidence.page <= len(pages) and evidence.quote in pages[evidence.page - 1]
+def evidence_valid(evidence: Evidence | None, pages: list[str]) -> bool:
+    return (
+        evidence is not None
+        and evidence.page <= len(pages)
+        and evidence.quote in pages[evidence.page - 1]
+    )
 
 
 def validate_claims(claims: Claims, pages: list[str]):
     for claim in claims.claims:
-        numbers = re.findall(r"-?\d+(?:,\d{3})*(?:\.\d+)?", claim.evidence.quote)
-        if not evidence_valid(claim.evidence, pages):
+        evidence = claim.evidence
+        if not evidence_valid(evidence, pages):
             raise UnsupportedClaimEvidence("quote_not_on_page")
+        page = pages[evidence.page - 1]
+        quotes = [
+            match.span() for match in re.finditer(re.escape(evidence.quote), page)
+        ]
         if not any(
-            Decimal(n.replace(",", "")) == Decimal(claim.value) for n in numbers
+            any(
+                start <= number.start() and number.end() <= end for start, end in quotes
+            )
+            and Decimal(number[0].replace(",", "").replace("−", "-"))
+            == Decimal(claim.value)
+            for number in NUMBER.finditer(page)
         ):
             raise UnsupportedClaimEvidence("value_not_in_quote")
         if (claim.metric == "margin") != (claim.currency == "PCT") or (
@@ -119,8 +156,18 @@ def validate_claims(claims: Claims, pages: list[str]):
 
 
 def extract_claims(review_id, step, pages):
-    for repair in (False, True):
-        claims = infer(review_id, step, Claims, {"pages": pages}, repair=repair)
+    existing = load_step(review_id, step)
+    if existing is not None:
+        return (
+            None
+            if existing.get("status") == "unresolved"
+            else Claims.model_validate(existing)
+        )
+    repair_reason = None
+    for _ in range(2):
+        claims = infer(
+            review_id, step, Claims, {"pages": pages}, repair_reason=repair_reason
+        )
         try:
             validate_claims(claims, pages)
         except UnsupportedClaimEvidence as exc:
@@ -129,12 +176,14 @@ def extract_claims(review_id, step, pages):
                 review_id=review_id,
                 step=step,
                 reason=str(exc),
-                repair=repair,
+                repair=repair_reason is not None,
             )
-            if repair:
-                raise
+            repair_reason = str(exc)
         else:
+            save_step(review_id, step, claims.model_dump())
             return claims
+    save_step(review_id, step, {"status": "unresolved", "reason": repair_reason})
+    return None
 
 
 def compare_claims(report: Claims, summary: Claims) -> list[dict]:
@@ -218,32 +267,90 @@ def compare_claims(report: Claims, summary: Claims) -> list[dict]:
 
 
 def narrative_context(pages):
-    """Bound the narrative window while retaining original, one-based page IDs."""
+    """Retain source page IDs and keep each document within the context budget."""
+    full = [{"page": index, "text": text} for index, text in enumerate(pages, 1)]
+
+    def fits(windows):
+        return (
+            len(json.dumps(windows, ensure_ascii=False).encode())
+            <= NARRATIVE_CONTEXT_BYTES
+        )
+
+    if fits(full):
+        return full
+
     windows = []
     for index, text in enumerate(pages, 1):
-        offset = text.casefold().find("margin")
-        if offset < 0:
-            continue
-        snippet = text[max(0, offset - 300) : offset + 1200]
-        candidate = windows + [{"page": index, "text": snippet}]
-        if len(json.dumps(candidate, ensure_ascii=False).encode()) <= 8000:
-            windows = candidate
+        covered_until = 0
+        for match in MARGIN_LANGUAGE.finditer(text):
+            if match.end() <= covered_until:
+                continue
+            end = min(len(text), match.end() + 1200)
+            snippet = text[max(0, match.start() - 300) : end]
+            candidate = windows + [{"page": index, "text": snippet}]
+            if fits(candidate):
+                windows = candidate
+                covered_until = end
     return windows or [{"page": 1, "text": pages[0][:1000]}]
 
 
-def infer(review_id, step, model_type, inputs, *, repair=False):
+def fiscal_period(pages, evidence):
+    def years(text):
+        return {m[1] or m[2] for m in FISCAL_YEAR.finditer(text)}
+
+    # Prefer an explicit period in the cited statement. A sole document
+    # period can qualify a citation without its own period.
+    text = evidence.quote if years(evidence.quote) else "\n".join(pages)
+    candidates = years(text)
+    if len(candidates) == 1 and not AMBIGUOUS_FISCAL_PERIOD.search(text):
+        return next(iter(candidates))
+    return None
+
+
+def validate_narrative(narrative, pages):
+    sources = {
+        "report": narrative.report_evidence,
+        "summary": narrative.summary_evidence,
+    }
+    for kind, evidence in sources.items():
+        if evidence is not None and not evidence_valid(evidence, pages[kind]):
+            raise ValueError("Unsupported narrative evidence")
+    if narrative.classification == "unresolved":
+        return narrative
+    report, summary = sources.values()
+    period = fiscal_period(pages["report"], report) if report else None
+    if not period or not summary or fiscal_period(pages["summary"], summary) != period:
+        return Narrative(
+            classification="unresolved",
+            explanation="No comparable fiscal period supported by both documents",
+            report_evidence=report,
+            summary_evidence=summary,
+        )
+    return narrative
+
+
+def compare_narrative(review_id, pages):
+    existing = load_step(review_id, "narrative")
+    if existing is not None:
+        return Narrative.model_validate(existing)
+    narrative = infer(
+        review_id,
+        "narrative",
+        Narrative,
+        {kind: narrative_context(text) for kind, text in pages.items()},
+    )
+    narrative = validate_narrative(narrative, pages)
+    save_step(review_id, "narrative", narrative.model_dump())
+    return narrative
+
+
+def infer(review_id, step, model_type, inputs, *, repair_reason=None):
     """Reserve a durable attempt before the call; never hold a SQL connection during inference."""
     payload = json.dumps(inputs, ensure_ascii=False)
     size = len(payload.encode())
     if size > 32000:
         raise ValueError("Inference input exceeds limit")
     with connect() as c:
-        existing = c.execute(
-            "SELECT output FROM public.review_steps WHERE review_id=%s AND step=%s AND config_hash=%s",
-            (review_id, step, CONFIG),
-        ).fetchone()
-        if existing:
-            return model_type.model_validate(existing["output"])
         run = c.execute(
             "UPDATE public.review_runs SET model_calls=model_calls+1, input_bytes_reserved=input_bytes_reserved+%s "
             "WHERE review_id=%s AND config_hash=%s AND model_calls < %s AND input_bytes_reserved+%s <= %s RETURNING model_calls",
@@ -298,14 +405,16 @@ def infer(review_id, step, model_type, inputs, *, repair=False):
                             "Use only supplied evidence and exact page quotations. Do not invent or infer missing figures. "
                             "For claims use explicit entity, period, currency (PCT for margin), scale and accounting basis; "
                             "use 'unspecified' for missing qualifiers. For narrative compare only claims about margin direction; "
-                            "return unresolved when evidence is insufficient. Values must appear in quoted text. "
+                            "return unresolved when evidence or comparable fiscal periods are missing. "
+                            "Use null for unavailable narrative citations. "
+                            "Copy the full source amount into each quotation, including punctuation. "
+                            "In value remove grouping separators, but keep the sign and decimal. "
+                            "Do not convert scale; record it separately. Omit direction-only margin as a number. "
                             + PROMPT
                             + (
-                                " The previous extraction failed evidence validation. "
-                                "Quote a contiguous substring of the cited page exactly, including punctuation. "
-                                "Each numerical value must be explicitly present in the quote. "
-                                "Omit claims you cannot support, including direction-only margin statements."
-                                if repair
+                                f" The previous extraction failed evidence validation ({repair_reason}). "
+                                + REPAIR_GUIDANCE[repair_reason]
+                                if repair_reason is not None
                                 else ""
                             )
                         ),
@@ -366,12 +475,21 @@ def infer(review_id, step, model_type, inputs, *, repair=False):
         return model_type.model_validate_json(response.choices[0].message.content)
 
 
-def save_step(review_id, step, result):
+def load_step(review_id, step):
+    with connect() as c:
+        row = c.execute(
+            "SELECT output FROM public.review_steps WHERE review_id=%s AND step=%s AND config_hash=%s",
+            (review_id, step, CONFIG),
+        ).fetchone()
+    return row["output"] if row else None
+
+
+def save_step(review_id, step, output):
     with connect() as c:
         c.execute(
             "INSERT INTO public.review_steps (review_id,step,config_hash,output) VALUES (%s,%s,%s,%s) "
             "ON CONFLICT DO NOTHING",
-            (review_id, step, CONFIG, Jsonb(result.model_dump())),
+            (review_id, step, CONFIG, Jsonb(output)),
         )
 
 
@@ -437,31 +555,24 @@ def _process_review(review_id):
                 "application/json",
             )
             claims[kind] = extract_claims(review_id, kind, pages[kind])
-            save_step(review_id, kind, claims[kind])
         if set(claims) != {"report", "summary"}:
             raise ValueError("Missing document pair")
-        findings = compare_claims(claims["report"], claims["summary"])
-        narrative = infer(
-            review_id,
-            "narrative",
-            Narrative,
-            {
-                "report": narrative_context(pages["report"]),
-                "summary": narrative_context(pages["summary"]),
-            },
+        invalid = sorted(kind for kind, result in claims.items() if result is None)
+        findings = (
+            [] if invalid else compare_claims(claims["report"], claims["summary"])
         )
-        if not evidence_valid(
-            narrative.report_evidence, pages["report"]
-        ) or not evidence_valid(narrative.summary_evidence, pages["summary"]):
-            raise ValueError("Unsupported narrative evidence")
-        save_step(review_id, "narrative", narrative)
+        narrative = compare_narrative(review_id, pages)
         findings.append({"check": "narrative", **narrative.model_dump()})
-        if not claims["report"].claims or not claims["summary"].claims:
+        if invalid or any(not result.claims for result in claims.values()):
             findings.append(
                 {
                     "check": "coverage",
                     "classification": "unresolved",
-                    "explanation": "Missing structured claims",
+                    "explanation": (
+                        "Unsupported numeric evidence in " + " and ".join(invalid)
+                        if invalid
+                        else "Missing structured claims"
+                    ),
                 }
             )
         with connect() as c:

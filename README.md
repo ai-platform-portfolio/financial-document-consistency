@@ -140,4 +140,44 @@ Freshness checking and uploading are not atomic. A later deployment consumer
 must independently verify the successful authorized workflow attempt, current
 source, image digest and migration content before selecting the artifacts.
 Source-named tags alone are not registry-enforced immutability. No Helm release,
-application registration, live database or public route is created here.
+application registration, live database or public route was created by the initial
+image/migration publication milestone.
+
+## Complete application releases
+
+`deploy/values.yaml` contains application intent: the API port/health paths and its
+`reviews` database. CI supplies the source-matching API digest, migration reference
+and expected revision through `scripts/write-release-values.py`. The mapper checks
+the source, workflow attempt, image identity and migration checksum before writing
+values. No chart templates or database administration live in this repository.
+
+CI checks out the shared chart at the workflow's full `APPLICATION_CHART_REVISION`
+pin and calls the existing `ops-shared` OCI publisher. The package contains the
+unchanged shared chart, generated `release-values.yaml` and publisher-generated
+`publication.json`. Its `appVersion` is the full application source SHA and its
+version is `0.<workflow-run-number>.<attempt>-g<source-SHA>`.
+
+Destinations are `releases/<owner>/<repository>/pr-<number>/application` for trusted
+PRs and `releases/<owner>/<repository>/main/application` for main. One repository-
+derived Atlas schema-plan repository is ensured for later operator role management;
+it creates no database or SQL roles. Resource/database/runtime names remain derived
+by the chart from the identity that deployment automation supplies.
+
+The release tag is write-locked using the existing ACR action before the final
+record is uploaded. `artifacts.json` adds `release.reference`, `release.digest` and
+`release.chartRevision`. A failed package, push, lock or freshness gate withholds
+the complete handoff. Deployment consumers still verify current source and the
+successful authorized run; locking is not a substitute for those checks. Record
+retention remains seven days; release/image/migration retention is separate.
+
+No hostname or route is declared. A local render is an internal API Service plus
+its dependencies, not a public endpoint or enforced network isolation. Environment
+registration, promotion activation and actual deployment remain separate steps.
+
+With PyYAML 6.0.3 installed in a development environment, run the focused mapping
+and real package/render tests against the workflow-pinned chart checkout:
+
+```sh
+APPLICATION_CHART=/path/to/pinned/application-helm-chart \
+  python -B -m unittest discover -s tests -p 'test_publication.py' -v
+```

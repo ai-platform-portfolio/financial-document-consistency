@@ -17,6 +17,7 @@ concurrency:
 env:
   ATLAS_NO_ANON_TELEMETRY: 'true'
   ATLAS_NO_UPDATE_NOTIFIER: 'true'
+  APPLICATION_CHART_REVISION: 11ac9f34624f14e4da7b8024c5fbdd80115ed254 # merged chart PR34
 
 jobs:
   source:
@@ -72,6 +73,24 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - run: python -m pip install -r backend/requirements.txt
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ai-platform-portfolio/application-helm-chart
+          ref: ${{ env.APPLICATION_CHART_REVISION }}
+          path: .application-chart
+          persist-credentials: false
+
+      - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        with:
+          version: v3.22.1
+
+      - run: python -m pip install PyYAML==6.0.3
+
+      - name: Test release mapping and actual chart package
+        env:
+          APPLICATION_CHART: .application-chart
+        run: python -B -m unittest discover -s tests -p 'test_publication.py' -v
 
       - name: Require Atlas bot for trusted publication
         if: needs.source.outputs.publish == 'true'
@@ -191,7 +210,12 @@ jobs:
     needs: [source, api, migrations]
     if: needs.source.outputs.publish == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
 
     env:
       SOURCE_SHA: ${{ needs.source.outputs.revision }}
@@ -228,6 +252,86 @@ jobs:
               migrations: {repository: "financial-document-consistency", tag: $sha,
                 url: ("atlas://financial-document-consistency?tag=" + $sha), atlasSumSha256: $checksum}}' \
             > artifacts.json
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ai-platform-portfolio/application-helm-chart
+          ref: ${{ env.APPLICATION_CHART_REVISION }}
+          path: .application-chart
+          persist-credentials: false
+
+      - uses: azure/setup-helm@b9e51907a09c216f16ebe8536097933489208112 # v4.3.0
+        with:
+          version: v3.22.1
+
+      - run: python3 -m pip install PyYAML==6.0.3
+
+      - name: Generate this application's release values
+        id: values
+        run: python3 scripts/write-release-values.py
+
+      - uses: ai-platform-portfolio/ops-shared/.github/actions/acr-helm-login@eddfe0cc46d5a2d60cb9b576d635f1d33aa8d9dc
+        with:
+          registry: localacrk8s
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: ariga/setup-atlas@2f3c785c89a15e1c0d07bcae3900fb5feb969eea
+        with:
+          version: v1.3.6
+          cloud-token: ${{ secrets.ATLAS_CLOUD_TOKEN }}
+
+      - name: Ensure the application's role-plan repository
+        uses: ai-platform-portfolio/ops-shared/.github/actions/atlas-repository@eddfe0cc46d5a2d60cb9b576d635f1d33aa8d9dc
+        with:
+          name: ${{ steps.values.outputs.role-repository }}
+          type: schema
+          driver: postgres
+
+      - name: Reject stale source immediately before release publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" |
+              jq -e --arg sha "$SOURCE_SHA" --arg repo "$GITHUB_REPOSITORY" \
+                '.state == "open" and .head.sha == $sha and .head.repo.full_name == $repo' >/dev/null
+          else
+            [[ "$GITHUB_REF" == refs/heads/main ]] || exit 1
+            [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$SOURCE_SHA" ]] || exit 1
+          fi
+
+      - name: Publish the complete shared-chart release
+        id: release
+        uses: ai-platform-portfolio/ops-shared/.github/actions/publish-release@eddfe0cc46d5a2d60cb9b576d635f1d33aa8d9dc
+        with:
+          chart: .application-chart
+          values: ${{ steps.values.outputs.values }}
+          destination: ${{ steps.values.outputs.destination }}
+          version: ${{ steps.values.outputs.version }}
+          revision: ${{ env.SOURCE_SHA }}
+
+      - name: Lock the published release against writes
+        uses: ai-platform-portfolio/ops-shared/.github/actions/acr-lock@eddfe0cc46d5a2d60cb9b576d635f1d33aa8d9dc
+        with:
+          registry: localacrk8s
+          reference: ${{ steps.release.outputs.reference }}
+
+      - name: Record the published release identity
+        env:
+          RELEASE_REFERENCE: ${{ steps.release.outputs.reference }}
+          RELEASE_DIGEST: ${{ steps.release.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]] || exit 1
+          jq --arg reference "$RELEASE_REFERENCE" --arg digest "$RELEASE_DIGEST" \
+            --arg chart "$APPLICATION_CHART_REVISION" \
+            '.release = {reference: $reference, digest: $digest, chartRevision: $chart}' \
+            artifacts.json > "$RUNNER_TEMP/artifacts.json"
+          mv "$RUNNER_TEMP/artifacts.json" artifacts.json
 
       - name: Reject stale handoff immediately before upload
         env:

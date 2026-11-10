@@ -1,0 +1,12 @@
+# CI injects the source-matching image and migration references before packaging.
+name: financial-document-consistency
+
+components:
+  api:
+    port: 8000
+    healthPath: /api/healthz
+    readinessPath: /api/readyz
+    database: reviews
+
+databases:
+  reviews: {}

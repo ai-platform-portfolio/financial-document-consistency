@@ -9,4 +9,5 @@ components:
     database: reviews
 
 databases:
-  reviews: {}
+  reviews:
+    reclaimPolicy: delete

@@ -172,7 +172,29 @@ retention remains seven days; release/image/migration retention is separate.
 
 No hostname or route is declared. A local render is an internal API Service plus
 its dependencies, not a public endpoint or enforced network isolation. Environment
-registration, promotion activation and actual deployment remain separate steps.
+registration uses the preview intent below; persistent environments and promotion
+remain separate steps.
+
+## Internal PR previews
+
+`deploy/previews.yaml` opts this repository into shared event-driven discovery.
+The platform supplies repository identity; the shared chart derives each PR's
+namespace, database, roles and client certificates. `generateHostname: false`
+clears the automatic preview hostname. This API declares no explicit hosts/routes,
+so no public ingress is rendered. This does not enforce network isolation or add
+user authentication; readiness acceptance uses internal access.
+
+Merge the shared discovery chart-pin adoption before this intent. Once the intent
+is on `main`, open same-repository PRs can deploy their own successfully published,
+source-matching releases through the native publication gate. The existing main
+release is not reused as a PR release. No application registration is maintained
+in GitOps and no manual database/credential setup is required.
+
+The `reviews` database declares `reclaimPolicy: delete`: preview data is disposable.
+Closing a PR triggers chart-owned ordered application/database/role/certificate
+cleanup. Publication alone does not prove deployed API readiness or cleanup;
+those require live acceptance after registration. Persistent data retention needs
+separately reviewed intent before adding persistent environments.
 
 With PyYAML 6.0.3 installed in a development environment, run the focused mapping
 and real package/render tests against the workflow-pinned chart checkout:

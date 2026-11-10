@@ -481,7 +481,7 @@ class IntegrationTests(unittest.TestCase):
         replacement.wait(timeout=15)
 
     def test_worker_retry_exhaustion_and_invalid_output(self):
-        for failure in ["rate", "schema", "evidence"]:
+        for failure in ["rate", "schema"]:
             with self.subTest(failure=failure):
                 review = self.verified_review()
                 worker = self.start_worker(failure=failure)
@@ -500,8 +500,32 @@ class IntegrationTests(unittest.TestCase):
                     ).fetchone()
                 self.assertEqual(
                     attempts,
-                    {"rate": (3, 3), "schema": (1, 1), "evidence": (2, 1)}[failure],
+                    {"rate": (3, 3), "schema": (1, 1)}[failure],
                 )
+
+    def test_exhausted_evidence_preserves_independent_narrative(self):
+        review = self.verified_review()
+        worker = self.start_worker(failure="evidence")
+        path = "/api/reviews/" + review["id"]
+        wait_for(lambda: self.request(path)[1]["status"] == "completed")
+        worker.terminate()
+        worker.wait(timeout=15)
+        status, result = self.request(path)
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            {(f["check"], f["classification"]) for f in result["findings"]},
+            {("coverage", "unresolved"), ("narrative", "issue")},
+        )
+        status, evidence = self.request(path + "/evidence")
+        self.assertEqual(status, 200)
+        self.assertEqual(evidence["run"]["model_calls"], 5)
+        self.assertEqual(evidence["run"]["worker_attempts"], 1)
+        numeric_steps = [
+            s["output"] for s in evidence["steps"] if s["step"] in {"report", "summary"}
+        ]
+        self.assertEqual(
+            numeric_steps, [{"status": "unresolved", "reason": "quote_not_on_page"}] * 2
+        )
 
     def test_unsupported_evidence_repair_is_counted(self):
         review = self.verified_review()
@@ -657,8 +681,7 @@ def fixture_runtime():
                     output = {"claims": []}
                 elif failure == "evidence" or (
                     failure == "repair"
-                    and "previous extraction failed"
-                    not in kwargs["messages"][0]["content"]
+                    and "(quote_not_on_page)" not in kwargs["messages"][0]["content"]
                 ):
                     output["claims"][0]["evidence"]["quote"] = "Unsupported paraphrase"
             else:

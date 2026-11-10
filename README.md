@@ -331,3 +331,22 @@ observed completion times, API read timings, provider attempts and token usage.
 Correlate those IDs with worker queue timing and read-only PostgreSQL activity
 samples for the preview database. Treat the small burst as a comparison of the
 two configurations and use the local fixture for larger row counts.
+
+### Held-out document evaluation
+
+The eight synthetic pairs cover table-like text, multi-page notes, legitimate
+unit and period differences, inconsistent totals, duplicates, missing evidence,
+and untrusted instructions. Validate the labelled claims and evidence locally,
+then score one live pass through a source-matching disposable preview.
+
+```sh
+python tests/evaluate_heldout.py --local
+python tests/evaluate_heldout.py --base-url http://127.0.0.1:18000 --live-model --output /tmp/document-heldout.jsonl
+```
+
+The runner scores matched, missing and extra findings by check and classification,
+counts failed reviews as misses, and records model usage and step evidence.
+A locatable citation is an exact substring of its claimed page. Inclusion of a
+labelled span is a separate strict check. Review alternative valid quotations
+and semantic support manually. Local checks use hand-labelled extraction, while
+live scoring includes model extraction and narrative inference.

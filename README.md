@@ -7,10 +7,12 @@ numerical or narrative discrepancies with paired source evidence. It exercises
 document extraction, governed inference, durable background processing,
 PostgreSQL and evaluated delivery through the portfolio's shared templates.
 
-**Status:** review registration and persistence are implemented. Document upload,
-extraction, processing, findings and user authentication are not implemented.
-See [DESIGN.md](DESIGN.md) for architecture and later milestones. This API is a
-local acceptance slice; it is not ready for public deployment.
+**Status:** source implements PDF upload, durable review processing, Foundry
+extraction, evidence-backed checks and evaluated internal delivery. Local tests use
+real PostgreSQL/workers and controlled model/storage responses; they do not prove
+live Azure permissions or model quality. The shared data-only Blob role requires
+provisioner authority before live acceptance. No user authentication or public
+endpoint is provided. See [DESIGN.md](DESIGN.md) for boundaries and tradeoffs.
 
 ## API contract
 
@@ -49,8 +51,12 @@ tenants; tenant-aware authorisation is a prerequisite for later public deploymen
 `GET /api/reviews/{id}` returns the review or `404`; invalid requests return `422`.
 
 Reviews and document versions are insert/read-only through this API/runtime role.
-`registered` is derived from the persisted review's existence, not a queued or
-completed processing state. Attempts and transitions arrive with the worker.
+Legacy metadata-only versions remain unverified and produce `registered` reviews.
+Verified uploads enter `queued -> running -> completed/failed`; review creation and
+native Procrastinate job submission commit together. Only `financial-v1` is accepted
+for processing. Completed responses include findings; unresolved checks are distinct
+from processing failure. A maximum backlog of 100 queued/running reviews returns
+`429` and rolls back unaccepted work. Same-key retries do not enqueue again.
 `/api/healthz` checks process health; `/api/readyz` checks required table columns.
 Database/credential failures return generic `503` responses without driver errors.
 
@@ -70,8 +76,11 @@ an ephemeral loopback-only port. It generates credentials in memory, creates loc
 restricted migrator/runtime roles, applies the native Atlas migration and starts
 the actual API. It accepts no external database URL. Tests cover concurrent
 idempotency, conflicting inputs, constraints, role denials, migration reapply,
-API restart persistence and database outage/recovery. The API/container/volume are
-removed on completion. These local role fixtures are not deployment scaffolding.
+API restart persistence, database outage/recovery, verified upload retries, atomic
+queue rollback, worker interruption/recovery, duplicate delivery, backpressure,
+retry exhaustion and malformed outputs. Test-only adapters replace Blob/Foundry;
+production code contains no fake mode. The API/workers/container/volume are removed
+on completion. These local role fixtures are not deployment scaffolding.
 
 Run native migration checks separately on disposable dev databases:
 
@@ -90,7 +99,9 @@ does not run migrations at startup.
 ## Runtime
 
 Build with `docker build -t financial-document-consistency-api backend`.
-The runtime image is non-root and has no migration runner or test dependencies.
+The runtime image is non-root and has no migration runner or test harness. Run the
+same image with `python worker.py` for the worker. Its native readiness/liveness
+command is `python worker.py --health`; it exposes no HTTP Service.
 Run only on loopback for local development, supplying `DATABASE_URL` internally.
 Use the restricted runtime connection, never the migrator/admin connection.
 
@@ -203,3 +214,96 @@ and real package/render tests against the workflow-pinned chart checkout:
 APPLICATION_CHART=/path/to/pinned/application-helm-chart \
   python -B -m unittest discover -s tests -p 'test_publication.py' -v
 ```
+
+
+## Upload-to-findings contract
+
+`PUT /api/documents/{report|summary}/{upload_uuid}` accepts raw
+`application/pdf`. Limits are 5 MiB, 20 text-bearing pages and 24,000 extracted
+characters and 32,000 serialized input bytes per document. Upload identity is idempotent; different content/type
+returns `409`. The server computes SHA-256, persists intent before the conditional
+Blob write and marks a document verified only after that write. Retry completes a
+partially committed upload without overwriting another object. Failed uploads are
+never reviewable. Orphan intents/objects remain disposable until retry or preview
+cleanup; this is not a cross-service transaction or a continuous garbage collector.
+
+Only born-digital text PDFs are supported. Encrypted, scanned/image-only, empty
+and oversized documents return `422`. Parsing runs in a child with a 12-second
+wall deadline, eight-second CPU limit and Linux 512 MiB address-space limit.
+API/worker memory limits include the parser; uploads are serialized per API process.
+Page quotations are preserved; no OCR, table geometry or bounding-box claim is made.
+
+Create the review with the existing `POST /api/reviews` contract and verified
+version IDs. `GET /api/reviews/{id}` returns processing status/findings.
+`GET /api/reviews/{id}/evidence` returns validated extraction steps, frozen config,
+actual model identity and known token counts, separately identifying uncertain
+attempts whose provider outcome did not commit. Content is returned only through
+the internal API, not in application logs or traces.
+
+The worker compares compatible entity/period/currency/scale/accounting-basis
+claims with Decimal arithmetic (absolute tolerance 0.01 normalized currency units;
+margin tolerance 0.1 percentage points). Missing/ambiguous comparators are
+unresolved. One schema-constrained narrative call checks margin direction. Exact
+quotes must occur on their cited page; schema validity does not establish truth.
+
+## Durability and operational bounds
+
+Procrastinate 3.10.0 uses the review transaction's external psycopg connection.
+Its reviewed MIT schema is versioned in the Atlas migration, with its licence
+notice; neither API nor worker installs schema at startup. Upgrade dependency
+and vendor SQL together. API and worker SQL pools are bounded; listeners use direct
+connections. No application SQL transaction or checked-out application connection spans a model
+call; worker-control/listener connections remain. Queue traffic shares CNPG
+with application data: this trades a broker/outbox boundary for database contention.
+
+Notifications wake workers; a 30-second fallback and minute-level heartbeat-based
+stalled-job recovery cover missed notifications and worker death. These are explicit
+recovery mechanisms, not PR polling. Worker concurrency defaults to one. There are
+three processing attempts, exponential provider backoff, 45-second model-call
+limits, at most 12 reserved inference calls and 96,000 serialized input bytes per
+review, and at most 3,000 output tokens per call. Admission bounds pending reviews.
+No autoscaler or global cross-application model quota controller is implied.
+
+A successful external model call can be repeated after a crash before result
+commit. Validated completed steps are reused, terminal publication is idempotent,
+and uncertain calls remain counted. Prompt/schema/check/release identities are
+frozen; an incompatible worker release fails old queued work explicitly rather
+than processing it under a different contract. Model deployment and returned
+model version are bound on first use and checked on subsequent calls.
+
+OpenTelemetry emits request/review/model/database spans to the existing collector.
+JSON events record IDs, config, queue age, duration and outcome, without source
+text. Token usage is persisted; missing responses are not reported as zero-cost.
+
+## Evaluation and acceptance
+
+```sh
+python -B -m unittest discover -s tests -p 'test_processing.py' -v
+python tests/integration.py
+python tests/load.py > /tmp/document-pipeline-load.json
+```
+
+Versioned labelled numerical cases cover disagreements, unit scales, rounding,
+period/currency/basis mismatches and ambiguous evidence. Real PDF extraction and
+page/quote/value validation are tested separately. The document cases include labelled contradictions, consistency and missing
+narrative evidence with an injected instruction, with separate revenue-extraction
+and numeric/narrative labels. The integration fixture uses controlled model
+responses to verify this harness; it is not a real-model semantic-quality score. `tests/load.py` owns its fixture and accepts no external
+DB target. It compares 1k/10k/100k seeded reviews and one/two workers with synthetic
+inference, reporting query plans, p50/p95, backlog, connections, CPU samples and
+throughput. Local results are not live cluster capacity or provider throughput. The fault
+fixture accelerates native heartbeat/recovery/fallback timers; production retains
+the documented bounds.
+
+For an explicitly selected, source-matching internal preview, use a loopback-only
+Service tunnel and submit one bounded real-model acceptance pair:
+
+```sh
+python tests/deployed.py --base-url http://127.0.0.1:18000 --live-model --cases 3
+```
+
+The deployed test writes disposable API records, checks upload retries, review
+idempotency/conflict, persisted findings and evidence/model usage. Platform
+acceptance separately verifies actual workload identities, cross-preview Blob
+read/write denials, source/image provenance and close-triggered resource cleanup.
+Live evidence belongs in the delivery record, not a claim inferred from CI.

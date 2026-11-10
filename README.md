@@ -331,3 +331,5 @@ observed completion times, API read timings, provider attempts and token usage.
 Correlate those IDs with worker queue timing and read-only PostgreSQL activity
 samples for the preview database. Treat the small burst as a comparison of the
 two configurations and use the local fixture for larger row counts.
+
+<!-- AI-227 disposable preview isolation participant a. -->

@@ -172,6 +172,12 @@ class PublicationTests(unittest.TestCase):
                 ignore=shutil.ignore_patterns(".git", ".github", "__pycache__"),
             )
             (chart / "release-values.yaml").write_text(yaml.safe_dump(values))
+            # The shared publisher lints before stamping appVersion/environment bindings.
+            subprocess.run(
+                [helm, "lint", str(chart), "-f", str(chart / "release-values.yaml")],
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
             subprocess.run(
                 [
                     helm,

@@ -1,6 +1,6 @@
 # Financial document AI pipeline
 
-Status: proposed implementation design, 9 November 2026.
+Status: consolidated pipeline source implementation under review, 10 November 2026.
 Tracking: [AI-200](https://linear.app/ai-platform-portfolio/issue/AI-200/document-the-financial-consistency-application-design).
 
 ## System objective
@@ -11,8 +11,8 @@ inference consumption, observable database behaviour and evaluated releases.
 Document consistency checking is the acceptance workload. This repository owns
 its application semantics; the shared repositories own infrastructure templates.
 
-No application code, database schema, infrastructure provisioning or deployment
-is delivered by this document. Existing portfolio infrastructure is a dependency,
+This document describes the architecture; implementation and acceptance evidence
+are distinguished in README and the delivery record. Existing portfolio infrastructure is a dependency,
 not evidence that this application's isolation, recovery or capacity is proven.
 
 ## Workload and boundaries
@@ -223,3 +223,25 @@ consumer must use shared templates unchanged. User owns merges and deployments.
 
 Research gathered in November 2026. Verify current service/API support, region,
 licensing and cost before selecting dependencies.
+
+
+## First complete pipeline implementation decisions
+
+The first slice uses text-based PDF uploads, private Blob artifacts, Procrastinate
+3.10.0 on CNPG, one API/worker image and the existing Foundry deployment. Atomic
+review/job admission avoids a separate broker outbox; notification wake-ups retain
+bounded fallback/stalled-job recovery. Library SQL is versioned by Atlas, while
+shared access migrations own grants and preserve the prior append-only profile.
+
+Reusable chart intent supplies worker commands, storage/model dependencies and
+an opt-in read/write runtime profile. Generated per-preview identities receive
+account-scoped data-only Blob permissions conditioned on their own container and
+the existing account-scoped inference role. Provisioner role-definition authority is a prerequisite;
+using broad built-in container-management grants would not satisfy the boundary.
+This remains a trusted-repository contract, not hostile-developer admission isolation.
+
+No OCR, vector index, frontend, new broker, APIM or hosted-agent deployment is
+needed for this slice. Deterministic numeric checks and a bounded narrative call
+publish paired evidence with unresolved coverage explicit. Runtime failure/load/
+quality evidence is tested independently; CI synthetic responses do not prove
+Foundry quality, live Azure authorization, HA or production readiness.

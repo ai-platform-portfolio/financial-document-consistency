@@ -249,6 +249,9 @@ records unresolved numeric coverage and continues the independent narrative
 check. Definitive narrative findings require exact quotations and the same
 identifiable fiscal year. Short documents retain all pages in the narrative
 context; longer documents use bounded windows around margin language.
+The narrative call receives each unambiguous document-level fiscal year as
+structured context, so a margin quotation can refer back to a header on
+another page.
 
 ## Durability and operational bounds
 
@@ -354,3 +357,8 @@ A locatable citation is an exact substring of its claimed page. Inclusion of a
 labelled span is a separate strict check. Review alternative valid quotations
 and semantic support manually. Local checks use hand-labelled extraction, while
 live scoring includes model extraction and narrative inference.
+
+Use `--suite fiscal-context` for the four-pair fiscal context regression.
+It runs the known cross-page miss and three controls for comparable,
+different and ambiguous fiscal periods. The default suite retains the
+original eight pairs.

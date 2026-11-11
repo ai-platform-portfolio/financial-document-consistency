@@ -792,5 +792,199 @@
       ],
       "layout": "cross-page narrative"
     }
+  ],
+  "fiscal_context_documents": [
+    {
+      "name": "fiscal-context-same-year",
+      "pages": {
+        "report": [
+          "Harbor Services annual financial statements. FY2026 statutory revenue GBP 96,000.",
+          "Gross profit as a proportion of revenue increased."
+        ],
+        "summary": [
+          "Harbor Services FY2026 summary. statutory revenue GBP 96,000.",
+          "Gross margin rose."
+        ]
+      },
+      "facts": {
+        "report": [
+          {
+            "metric": "revenue",
+            "value": "96000",
+            "entity": "Harbor Services",
+            "period": "2026",
+            "currency": "GBP",
+            "scale": "units",
+            "basis": "statutory",
+            "evidence": {
+              "page": 1,
+              "quote": "statutory revenue GBP 96,000"
+            }
+          }
+        ],
+        "summary": [
+          {
+            "metric": "revenue",
+            "value": "96000",
+            "entity": "Harbor Services",
+            "period": "2026",
+            "currency": "GBP",
+            "scale": "units",
+            "basis": "statutory",
+            "evidence": {
+              "page": 1,
+              "quote": "statutory revenue GBP 96,000"
+            }
+          }
+        ]
+      },
+      "expected": [
+        [
+          "numeric",
+          "revenue",
+          "consistent"
+        ]
+      ],
+      "narrative": "consistent",
+      "locations": [
+        [
+          2,
+          "Gross profit as a proportion of revenue increased."
+        ],
+        [
+          2,
+          "Gross margin rose."
+        ]
+      ],
+      "layout": "cross-page fiscal header"
+    },
+    {
+      "name": "fiscal-context-different-years",
+      "pages": {
+        "report": [
+          "Elm Logistics annual financial statements. FY2024 statutory revenue GBP 96,000.",
+          "Operating margin fell."
+        ],
+        "summary": [
+          "Elm Logistics FY2025 summary. statutory revenue GBP 96,000.",
+          "Operating margin improved."
+        ]
+      },
+      "facts": {
+        "report": [
+          {
+            "metric": "revenue",
+            "value": "96000",
+            "entity": "Elm Logistics",
+            "period": "2024",
+            "currency": "GBP",
+            "scale": "units",
+            "basis": "statutory",
+            "evidence": {
+              "page": 1,
+              "quote": "statutory revenue GBP 96,000"
+            }
+          }
+        ],
+        "summary": [
+          {
+            "metric": "revenue",
+            "value": "96000",
+            "entity": "Elm Logistics",
+            "period": "2025",
+            "currency": "GBP",
+            "scale": "units",
+            "basis": "statutory",
+            "evidence": {
+              "page": 1,
+              "quote": "statutory revenue GBP 96,000"
+            }
+          }
+        ]
+      },
+      "expected": [
+        [
+          "numeric",
+          "revenue",
+          "unresolved"
+        ]
+      ],
+      "narrative": "unresolved",
+      "locations": [
+        [
+          2,
+          "Operating margin fell."
+        ],
+        [
+          2,
+          "Operating margin improved."
+        ]
+      ],
+      "layout": "cross-page fiscal header"
+    },
+    {
+      "name": "fiscal-context-ambiguous",
+      "pages": {
+        "report": [
+          "Quartz Ltd comparative annual review for FY2024 and FY2025. FY2025 statutory revenue GBP 96,000.",
+          "Gross profit as a percentage of sales rose."
+        ],
+        "summary": [
+          "Quartz Ltd FY2025 summary. statutory revenue GBP 96,000.",
+          "Gross margin fell."
+        ]
+      },
+      "facts": {
+        "report": [
+          {
+            "metric": "revenue",
+            "value": "96000",
+            "entity": "Quartz Ltd",
+            "period": "2025",
+            "currency": "GBP",
+            "scale": "units",
+            "basis": "statutory",
+            "evidence": {
+              "page": 1,
+              "quote": "statutory revenue GBP 96,000"
+            }
+          }
+        ],
+        "summary": [
+          {
+            "metric": "revenue",
+            "value": "96000",
+            "entity": "Quartz Ltd",
+            "period": "2025",
+            "currency": "GBP",
+            "scale": "units",
+            "basis": "statutory",
+            "evidence": {
+              "page": 1,
+              "quote": "statutory revenue GBP 96,000"
+            }
+          }
+        ]
+      },
+      "expected": [
+        [
+          "numeric",
+          "revenue",
+          "consistent"
+        ]
+      ],
+      "narrative": "unresolved",
+      "locations": [
+        [
+          2,
+          "Gross profit as a percentage of sales rose."
+        ],
+        [
+          2,
+          "Gross margin fell."
+        ]
+      ],
+      "layout": "cross-page fiscal header"
+    }
   ]
 }

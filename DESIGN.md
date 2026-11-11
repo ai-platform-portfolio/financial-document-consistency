@@ -65,8 +65,8 @@ AI infrastructure responsibilities:
 
 Foundry supplies managed inference; this design does not require GPU nodes.
 Reuse the portfolio's available authenticated inference path. APIM is not a
-prerequisite for the first application. Assess existing agent-factory capabilities
-before reuse; a fixed worker pipeline does not inherently need a hosted agent.
+prerequisite for the first application. The fixed worker pipeline uses direct
+model inference and does not require a hosted agent.
 
 ## Ownership and self-service contract
 

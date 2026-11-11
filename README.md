@@ -362,3 +362,5 @@ Use `--suite fiscal-context` for the four-pair fiscal context regression.
 It runs the known cross-page miss and three controls for comparable,
 different and ambiguous fiscal periods. The default suite retains the
 original eight pairs.
+
+<!-- AI-232 disposable post-rebuild smoke check. -->

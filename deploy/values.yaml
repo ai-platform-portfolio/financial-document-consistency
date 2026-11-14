@@ -43,3 +43,7 @@ databases:
 storage:
   documents:
     reclaimPolicy: delete
+
+platform:
+  gateway:
+    defaultComponent: api

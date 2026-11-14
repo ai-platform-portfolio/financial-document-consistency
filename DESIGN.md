@@ -240,7 +240,8 @@ the existing account-scoped inference role. Provisioner role-definition authorit
 using broad built-in container-management grants would not satisfy the boundary.
 This remains a trusted-repository contract, not hostile-developer admission isolation.
 
-No OCR, vector index, frontend, new broker, APIM or hosted-agent deployment is
+The browser interface is served by the existing API image. No OCR, vector index,
+new broker, APIM or hosted-agent deployment is
 needed for this slice. Deterministic numeric checks and a bounded narrative call
 publish paired evidence with unresolved coverage explicit. Runtime failure/load/
 quality evidence is tested independently; CI synthetic responses do not prove

@@ -539,7 +539,9 @@ def _process_review(review_id):
                 "WHERE review_id=%s AND status IN ('queued','running') AND worker_attempts>=3",
                 (review_id,),
             )
+            c.execute("SELECT pg_notify('review_updates', %s)", (str(review_id),))
             return
+        c.execute("SELECT pg_notify('review_updates', %s)", (str(review_id),))
         docs = c.execute(
             "SELECT d.* FROM public.document_versions d JOIN public.reviews r "
             "ON d.id IN (r.report_version_id,r.summary_version_id) WHERE r.id=%s",
@@ -598,6 +600,7 @@ def _process_review(review_id):
                 "WHERE review_id=%s AND config_hash=%s AND status='running'",
                 (Jsonb(findings), review_id, CONFIG),
             )
+            c.execute("SELECT pg_notify('review_updates', %s)", (str(review_id),))
         event(
             "review.completed",
             review_id=review_id,
@@ -617,6 +620,7 @@ def _process_review(review_id):
                     review_id,
                 ),
             )
+            c.execute("SELECT pg_notify('review_updates', %s)", (str(review_id),))
         event(
             "review.attempt_failed",
             review_id=review_id,

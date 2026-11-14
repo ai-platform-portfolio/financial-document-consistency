@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Document review · Financial consistency</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header><a class="brand" href="/">Financial consistency<span>Document review</span></a><span class="label">Report → summary</span></header>
+  <main>
+    <section class="intro"><p class="eyebrow">Evidence, side by side</p><h1>Does the summary<br>tell the same story?</h1><p>Compare a financial report with its summary. Review numerical differences and conflicting statements, with quotes from both documents.</p></section>
+    <section class="workspace" aria-labelledby="upload-title">
+      <div class="section-heading"><h2 id="upload-title">Choose your documents</h2><button id="example" class="text-button" type="button">Use sample documents <span aria-hidden="true">↗</span></button></div>
+      <form id="comparison">
+        <div class="documents">
+          <div class="document"><label for="report"><span class="step">01</span>Financial report</label><p>The original source of the figures and statements.</p><input id="report" type="file" accept=".pdf,application/pdf"><div class="file-detail"><span id="report-name">No document selected</span><a id="report-view" hidden target="_blank" rel="noopener">View PDF</a></div></div>
+          <div class="document"><label for="summary"><span class="step">02</span>Summary</label><p>The document you want to check against the report.</p><input id="summary" type="file" accept=".pdf,application/pdf"><div class="file-detail"><span id="summary-name">No document selected</span><a id="summary-view" hidden target="_blank" rel="noopener">View PDF</a></div></div>
+        </div>
+        <div class="action-row"><p>Text-based PDFs · up to 5 MiB each<br><span>Scanned or encrypted PDFs are not supported.</span></p><button id="compare" type="submit" disabled>Compare documents <span aria-hidden="true">→</span></button></div>
+      </form>
+      <p id="message" role="status" aria-live="polite" hidden></p>
+      <a id="failure-evidence" target="_blank" rel="noopener" hidden>View processing evidence ↗</a>
+      <button id="reconnect" class="text-button" type="button" hidden>Reconnect to this review</button>
+    </section>
+    <section id="results" aria-labelledby="results-title" hidden>
+      <div class="section-heading"><div><p class="eyebrow">Review complete</p><h2 id="results-title">Your comparison</h2></div><a id="evidence-link" target="_blank" rel="noopener">View processing evidence ↗</a></div>
+      <p id="summary-line"></p><p class="review-note">Findings are checks to review, not a guarantee of completeness. Confirm the quoted context before making a decision.</p>
+      <div id="findings"></div>
+      <p id="review-reference" class="reference"></p>
+    </section>
+  </main>
+  <footer>Financial document consistency <span>Numerical checks + evidence-backed narrative comparison</span></footer>
+  <template id="finding-template"><article class="finding"><div class="finding-heading"><h3></h3><span class="badge"></span></div><p class="explanation"></p><div class="quotes"><blockquote><div>Financial report <span class="page"></span></div><p></p></blockquote><blockquote><div>Summary <span class="page"></span></div><p></p></blockquote></div></article></template>
+</body>
+</html>

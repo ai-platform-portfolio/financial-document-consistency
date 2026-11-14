@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import tempfile
+import threading
 import unittest
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -392,6 +393,51 @@ class IntegrationTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(count, 1)
         return review
+
+    def test_browser_assets_and_event_driven_review(self):
+        with urlopen(self.base + "/", timeout=5) as response:
+            self.assertEqual(response.status, 200)
+            self.assertIn("default-src 'self'", response.headers["Content-Security-Policy"])
+            self.assertIn(b"Compare documents", response.read())
+        for asset in ["app.js", "app.css", "examples/report.pdf", "examples/summary.pdf"]:
+            with urlopen(self.base + "/static/" + asset, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+                self.assertTrue(response.read())
+        self.assertEqual(self.request("/api/reviews/" + str(uuid4()) + "/events")[0], 404)
+        review = self.verified_review()
+        subscribed = threading.Event()
+
+        def receive():
+            states = []
+            with urlopen(self.base + "/api/reviews/" + review["id"] + "/events", timeout=25) as response:
+                self.assertEqual(response.headers.get_content_type(), "text/event-stream")
+                for line in response:
+                    if not line.startswith(b"data: "):
+                        continue
+                    snapshot = json.loads(line[6:])
+                    states.append(snapshot["status"])
+                    subscribed.set()
+                    if snapshot["status"] in {"completed", "failed"}:
+                        return states, snapshot
+            self.fail("Review stream ended without a terminal status")
+
+        with ThreadPoolExecutor(max_workers=1) as listeners:
+            received = listeners.submit(receive)
+            self.assertTrue(subscribed.wait(10), "Initial snapshot missing")
+            worker = self.start_worker(delay="0.2", quiet=True)
+            try:
+                states, result = received.result(timeout=25)
+            finally:
+                worker.terminate()
+                worker.wait(timeout=15)
+        self.assertEqual(states[0], "queued")
+        self.assertEqual(states[-1], "completed")
+        self.assertTrue(result["findings"])
+        # Reconnecting after completion gets a snapshot immediately, without
+        # needing a new notification or rerunning model work.
+        with urlopen(self.base + "/api/reviews/" + review["id"] + "/events", timeout=5) as response:
+            snapshot = json.loads(response.readline()[6:])
+            self.assertEqual(snapshot["status"], "completed")
 
     def test_worker_pipeline_and_transactional_rollback(self):
         review = self.verified_review()

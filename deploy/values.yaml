@@ -1,4 +1,4 @@
-# Disposable live acceptance AI-250, preview b.
+# Disposable live acceptance AI-250, preview b, revision 2.
 # CI injects the same source-matching API/worker image and migration references.
 name: financial-document-consistency
 components:

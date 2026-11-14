@@ -11,8 +11,8 @@ PostgreSQL and evaluated delivery through the portfolio's shared templates.
 extraction, evidence-backed checks and evaluated internal delivery. Local tests use
 real PostgreSQL/workers and controlled model/storage responses; they do not prove
 live Azure permissions or model quality. The shared data-only Blob role requires
-provisioner authority before live acceptance. No user authentication or public
-endpoint is provided. See [DESIGN.md](DESIGN.md) for boundaries and tradeoffs.
+provisioner authority before live acceptance. A browser review interface is served at `/`. Preview access remains internal until
+the gateway access policy is agreed; no user authentication is implemented. See [DESIGN.md](DESIGN.md) for boundaries and tradeoffs.
 
 ## API contract
 
@@ -382,3 +382,21 @@ The runtime uses the digest-pinned official Python Alpine image with binary whee
 only. Restoration CI identified high-severity findings in the archived Debian base
 and Starlette dependency; the base and compatible FastAPI/Starlette pins were
 updated rather than suppressing the shared HIGH/CRITICAL image-scan gate.
+
+## Browser review
+
+Open `/` on the application endpoint. Choose a report PDF and a summary PDF, or
+select **Use sample documents**, then **Compare documents**. The page uploads and
+verifies both files, starts one review and presents findings with paired page
+quotes. Existing 5 MiB/text-PDF limits and per-review model budgets apply.
+
+Status arrives over Server-Sent Events backed by PostgreSQL LISTEN/NOTIFY. No
+browser status polling or new broker is used. Reconnects receive the current
+snapshot before waiting for further notifications. A saved `#review=<id>` link
+can reopen a review. The API bounds concurrent stream connections; the browser
+stops waiting after five minutes and offers an explicit reconnect.
+
+The interface is plain HTML/CSS/JavaScript served from the API image, with a
+same-origin content policy and text-only rendering of document/model content.
+No frontend build service, framework or extra runtime image is needed. Request
+retries reuse upload IDs and the review idempotency key for the selected pair.

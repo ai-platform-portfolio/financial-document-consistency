@@ -1,10 +1,11 @@
-"""Register immutable document metadata and review requests; no processing yet."""
+"""Document upload, evidence review and event-driven browser workflow."""
 
+from pathlib import Path
 from datetime import datetime
 import hashlib
 import json
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 
 import procrastinate
 from typing import Annotated, Literal
@@ -12,11 +13,13 @@ from uuid import UUID, uuid4
 
 from azure.core.exceptions import AzureError
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, ConfigDict, Field
 import psycopg
 
-from db import close, connect, Connection, DATABASE_URL
+from db import close, connect, Connection, AsyncConnection, DATABASE_URL
 from extraction import extract_pages, MAX_BYTES
 from processing import CONFIG, PROFILE
 from storage import BlobStore
@@ -35,7 +38,20 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Financial document consistency", lifespan=lifespan)
+static = Path(__file__).with_name("static")
+app.mount("/static", StaticFiles(directory=static), name="static")
 uploads = asyncio.Semaphore(1)
+review_streams = asyncio.Semaphore(4)
+
+
+@app.get("/", include_in_schema=False)
+def review_page():
+    return FileResponse(static / "index.html", headers={
+        "Cache-Control": "no-cache",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "same-origin",
+    })
 producer = procrastinate.App(
     connector=procrastinate.SyncPsycopgConnector(
         conninfo=DATABASE_URL, connection_class=Connection,
@@ -350,3 +366,38 @@ def review_evidence(review_id: UUID):
             (review_id,),
         ).fetchone()
     return {"run": run, "steps": steps, "usage": usage}
+
+
+@app.get("/api/reviews/{review_id}/events", include_in_schema=False)
+async def review_events(review_id: UUID):
+    # Validate before opening the stream, so missing reviews retain HTTP 404.
+    await asyncio.to_thread(get_review, review_id)
+    if review_streams.locked():
+        raise HTTPException(status_code=429, detail="Too many open review streams")
+
+    async def events():
+        async with review_streams:
+            async with await AsyncConnection.connect(
+                DATABASE_URL, autocommit=True, connect_timeout=3
+            ) as connection:
+                # Subscribe before the snapshot: a completion during connection
+                # setup cannot be missed. Notifications are scoped to this DB.
+                await connection.execute("LISTEN review_updates")
+                while True:
+                    snapshot = await asyncio.to_thread(get_review, review_id)
+                    yield "data: " + json.dumps(jsonable_encoder(snapshot)) + "\n\n"
+                    if snapshot["status"] in {"completed", "failed"}:
+                        return
+                    notified = False
+                    while not notified:
+                        async with aclosing(connection.notifies(timeout=20)) as notifications:
+                            async for notification in notifications:
+                                if notification.payload == str(review_id):
+                                    notified = True
+                                    break
+                        if not notified:
+                            yield ": keep-alive\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+    })

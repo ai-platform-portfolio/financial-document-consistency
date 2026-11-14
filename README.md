@@ -377,3 +377,8 @@ The restored publication caller reuses the existing shared Docker workflow with
 image scanning enabled. The API and worker use the same source-matched image.
 The chart pin is finalized after the shared chart PR merges; merge the coordinated
 shared-platform adoption before this restoration. No manual deployment was run.
+
+The runtime uses the digest-pinned official Python Alpine image with binary wheels
+only. Restoration CI identified high-severity findings in the archived Debian base
+and Starlette dependency; the base and compatible FastAPI/Starlette pins were
+updated rather than suppressing the shared HIGH/CRITICAL image-scan gate.

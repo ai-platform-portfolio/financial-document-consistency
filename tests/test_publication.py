@@ -216,16 +216,20 @@ class PublicationTests(unittest.TestCase):
                         "name": "exampleblob",
                         "resourceGroup": "example-rg",
                     },
+                    "keyVault": {"name": "example", "resourceGroup": "example-rg"},
                     "blobRoleId": "/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.Authorization/roleDefinitions/00000000-0000-0000-0000-000000000003",
                 },
-                "models": {
-                    "chat": {
-                        "endpoint": "https://model.example.test/openai/v1/",
-                        "deployment": "chat",
-                        "resourceGroup": "example-rg",
-                        "account": "example-foundry",
-                        "project": "management",
-                    }
+                "modelGateway": {
+                    "endpoint": "https://models.example.test/v1/",
+                    "vaultUri": "https://example.vault.azure.net",
+                    "masterSecret": "fixture-master",
+                    "consumerIdentity": "org/financial-document-consistency",
+                    "policies": {"documents": {
+                        "maxBudget": 1, "budgetDuration": "30d", "rpm": 10,
+                        "tpm": 1000, "parallel": 2,
+                        "capabilities": {"default": {
+                            "model": "chat", "routes": ["/v1/chat/completions"]}},
+                    }},
                 },
             }
             result = subprocess.check_output(
@@ -239,7 +243,7 @@ class PublicationTests(unittest.TestCase):
                     "--set-json",
                     "platform.azure=" + json.dumps(platform["azure"]),
                     "--set-json",
-                    "platform.models=" + json.dumps(platform["models"]),
+                    "platform.modelGateway=" + json.dumps(platform["modelGateway"]),
                 ],
                 text=True,
             )

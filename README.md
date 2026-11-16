@@ -7,7 +7,7 @@ numerical or narrative discrepancies with paired source evidence. It exercises
 document extraction, governed inference, durable background processing,
 PostgreSQL and evaluated delivery through the portfolio's shared templates.
 
-**Status:** source implements PDF upload, durable review processing, Foundry
+**Status:** source implements PDF upload, durable review processing, gateway-backed
 extraction, evidence-backed checks and evaluated internal delivery. Local tests use
 real PostgreSQL/workers and controlled model/storage responses; they do not prove
 live Azure permissions or model quality. The shared data-only Blob role requires

@@ -9,11 +9,10 @@ import time
 from datetime import datetime, timezone
 from typing import Literal
 
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from azure.identity import DefaultAzureCredential
 from azure.core.exceptions import AzureError
 import psycopg
 from openai import (
-    OpenAI,
     APIConnectionError,
     APITimeoutError,
     RateLimitError,
@@ -21,6 +20,7 @@ from openai import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 from psycopg.types.json import Jsonb
+from portfolio_agent_runtime.agent import model_client, model_settings
 
 from db import connect
 from extraction import extract_pages
@@ -353,6 +353,14 @@ def compare_narrative(review_id, pages):
 
 def infer(review_id, step, model_type, inputs, *, repair_reason=None):
     """Reserve a durable attempt before the call; never hold a SQL connection during inference."""
+    if (
+        os.environ.get("MODEL_CONNECTION_MODE") != "gateway"
+        or os.environ.get("MODEL_AUTH_METHOD") != "api_key"
+        or not os.environ.get("MODEL_API_KEY_SECRET_URI")
+    ):
+        raise ValueError("Document inference requires scoped gateway credentials")
+    settings = model_settings()
+    deployment = settings["MODEL_DEPLOYMENT_NAME"]
     payload = json.dumps(inputs, ensure_ascii=False)
     size = len(payload.encode())
     if size > 32000:
@@ -370,7 +378,7 @@ def infer(review_id, step, model_type, inputs, *, repair_reason=None):
         bound = c.execute(
             "UPDATE public.review_runs SET model_deployment=COALESCE(model_deployment,%s) "
             "WHERE review_id=%s AND (model_deployment IS NULL OR model_deployment=%s) RETURNING review_id",
-            (os.environ["MODEL_DEPLOYMENT"], review_id, os.environ["MODEL_DEPLOYMENT"]),
+            (deployment, review_id, deployment),
         ).fetchone()
         if not bound:
             raise ValueError("Model deployment changed during review")
@@ -381,7 +389,7 @@ def infer(review_id, step, model_type, inputs, *, repair_reason=None):
         ).fetchone()["id"]
     with (
         tracer.start_as_current_span(
-            "foundry.inference", record_exception=False, set_status_on_exception=False
+            "gateway.inference", record_exception=False, set_status_on_exception=False
         ) as span,
         DefaultAzureCredential(
             process_timeout=5, connection_timeout=3, read_timeout=5, retry_total=1
@@ -394,15 +402,9 @@ def infer(review_id, step, model_type, inputs, *, repair_reason=None):
                 "pipeline.config": CONFIG,
             }
         )
-        token = get_bearer_token_provider(credential, "https://ai.azure.com/.default")
-        with OpenAI(
-            base_url=os.environ["MODEL_BASE_URL"],
-            api_key=token,
-            max_retries=0,
-            timeout=45,
-        ) as client:
+        with model_client(credential, timeout=45) as client:
             response = client.chat.completions.create(
-                model=os.environ["MODEL_DEPLOYMENT"],
+                model=deployment,
                 max_completion_tokens=MAX_OUTPUT_TOKENS,
                 messages=[
                     {
@@ -455,8 +457,8 @@ def infer(review_id, step, model_type, inputs, *, repair_reason=None):
         usage = response.usage
         span.set_attributes(
             {
-                "gen_ai.system": "azure.ai.foundry",
-                "gen_ai.request.model": os.environ["MODEL_DEPLOYMENT"],
+                "gen_ai.system": "litellm",
+                "gen_ai.request.model": deployment,
                 "gen_ai.response.model": response.model,
             }
         )

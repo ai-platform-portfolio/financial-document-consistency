@@ -16,7 +16,8 @@ components:
     - worker.py
     database: reviews
     storage: documents
-    model: chat
+    gatewayAccess:
+      policy: documents
     resources:
       limits:
         memory: 768Mi

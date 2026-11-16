@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 os.environ.setdefault("DATABASE_URL", "postgresql://unconfigured/unused")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
@@ -68,6 +70,85 @@ def claim(metric="revenue", value="100", **overrides):
         "evidence": {"page": 1, "quote": f"{metric} {value}"},
         **overrides,
     }
+
+
+class GatewayTests(unittest.TestCase):
+    settings = {
+        "MODEL_CONNECTION_MODE": "gateway",
+        "MODEL_AUTH_METHOD": "api_key",
+        "MODEL_BASE_URL": "https://models.example.test/v1/",
+        "MODEL_DEPLOYMENT_NAME": "documents-chat",
+        "MODEL_API_KEY_SECRET_URI": "https://fixture.vault.azure.net/secrets/documents",
+    }
+
+    def test_direct_or_incomplete_configuration_cannot_start_an_attempt(self):
+        import processing
+
+        cases = [
+            {"MODEL_CONNECTION_MODE": "foundry"},
+            {"MODEL_AUTH_METHOD": "entra"},
+            {"MODEL_API_KEY_SECRET_URI": ""},
+            {"MODEL_BASE_URL": ""},
+            {"MODEL_DEPLOYMENT_NAME": ""},
+            {"MODEL_API_KEY": "inline-key-is-not-the-delivery-contract"},
+        ]
+        for changes in cases:
+            with self.subTest(changes=changes), patch.dict(
+                os.environ, {**self.settings, **changes}, clear=True
+            ), patch.object(processing, "connect") as database, patch.object(
+                processing, "model_client"
+            ) as client:
+                with self.assertRaises(ValueError):
+                    processing.infer("review", "report", Claims, {"pages": ["revenue 100"]})
+                database.assert_not_called()
+                client.assert_not_called()
+
+    def test_gateway_request_preserves_schema_model_usage_and_has_no_fallback(self):
+        import processing
+        from openai import APIConnectionError
+        import httpx2
+
+        response = SimpleNamespace(
+            model="approved-gpt-version",
+            usage=SimpleNamespace(prompt_tokens=100, completion_tokens=20),
+            choices=[SimpleNamespace(
+                finish_reason="stop", message=SimpleNamespace(content='{"claims": []}')
+            )],
+        )
+        for failure in [None, APIConnectionError(request=httpx2.Request(
+            "POST", "https://models.example.test/v1/chat/completions"
+        ))]:
+            with self.subTest(failure=type(failure).__name__), patch.dict(
+                os.environ, self.settings, clear=True
+            ), patch.object(processing, "connect") as database, patch.object(
+                processing, "DefaultAzureCredential"
+            ), patch.object(processing, "model_client") as factory:
+                database.return_value.__enter__.return_value.execute.return_value.fetchone.return_value = {
+                    "id": "attempt"
+                }
+                client = factory.return_value.__enter__.return_value
+                request = client.chat.completions.create
+                request.return_value = response
+                request.side_effect = failure
+                if failure:
+                    with self.assertRaises(APIConnectionError):
+                        processing.infer("review", "report", Claims, {"pages": ["revenue 100"]})
+                else:
+                    self.assertEqual(processing.infer(
+                        "review", "report", Claims, {"pages": ["revenue 100"]}
+                    ).claims, [])
+                    calls = database.return_value.__enter__.return_value.execute.call_args_list
+                    self.assertTrue(any(
+                        args[0][0].startswith("UPDATE public.inference_attempts")
+                        and args[0][1][:3] == ("approved-gpt-version", 100, 20)
+                        for args in calls
+                    ))
+                factory.assert_called_once()
+                self.assertEqual(factory.call_args.kwargs, {"timeout": 45})
+                request.assert_called_once()
+                self.assertEqual(request.call_args.kwargs["model"], "documents-chat")
+                self.assertEqual(request.call_args.kwargs["max_completion_tokens"], 3000)
+                self.assertTrue(request.call_args.kwargs["response_format"]["json_schema"]["strict"])
 
 
 class ProcessingTests(unittest.TestCase):

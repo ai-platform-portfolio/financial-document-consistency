@@ -17,7 +17,7 @@ concurrency:
 env:
   ATLAS_NO_ANON_TELEMETRY: 'true'
   ATLAS_NO_UPDATE_NOTIFIER: 'true'
-  APPLICATION_CHART_REVISION: fd9add2a67063bbefcfe156f0974ce1b09e31977 # merged shared dependency lifecycle
+  APPLICATION_CHART_REVISION: 82b8ce5cb7aae1936c7554a7886c12b2363eab86 # scoped gateway publication
 
 jobs:
   source:

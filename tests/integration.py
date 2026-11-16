@@ -355,7 +355,10 @@ class IntegrationTests(unittest.TestCase):
                 "DATABASE_AUTH": "password",
                 "FIXTURE_STORAGE": self.storage.name,
                 "MODEL_BASE_URL": "https://fixture.invalid/v1/",
-                "MODEL_DEPLOYMENT": "fixture",
+                "MODEL_DEPLOYMENT_NAME": "fixture",
+                "MODEL_CONNECTION_MODE": "gateway",
+                "MODEL_AUTH_METHOD": "api_key",
+                "MODEL_API_KEY_SECRET_URI": "https://fixture.vault.azure.net/secrets/documents",
                 "FIXTURE_MODEL_DELAY": delay,
                 "FIXTURE_MODEL_FAILURE": failure,
                 "WORKER_HEALTH_PATH": str(Path(self.storage.name) / uuid4().hex),
@@ -765,8 +768,7 @@ def fixture_runtime():
                 ],
             )
 
-    processing.OpenAI = Model
-    processing.get_bearer_token_provider = lambda *args: lambda: "fixture-token"
+    processing.model_client = lambda credential, *, timeout: Model()
     if "--serve-fixture" in sys.argv:
         import uvicorn
 

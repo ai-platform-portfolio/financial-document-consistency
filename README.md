@@ -7,12 +7,34 @@ numerical or narrative discrepancies with paired source evidence. It exercises
 document extraction, governed inference, durable background processing,
 PostgreSQL and evaluated delivery through the portfolio's shared templates.
 
-**Status:** source implements PDF upload, durable review processing, Foundry
+**Status:** source implements PDF upload, durable review processing, gateway-backed
 extraction, evidence-backed checks and evaluated internal delivery. Local tests use
 real PostgreSQL/workers and controlled model/storage responses; they do not prove
 live Azure permissions or model quality. The shared data-only Blob role requires
 provisioner authority before live acceptance. A browser review interface is served at `/`. Preview access remains internal until
 the gateway access policy is agreed; no user authentication is implemented. See [DESIGN.md](DESIGN.md) for boundaries and tradeoffs.
+
+## Governed inference
+
+The worker uses the shared model client through LiteLLM only. Its existing
+workload identity reads a document-scoped, rotating virtual key from Key Vault;
+LiteLLM applies the document policy's model allowlist, limits and accounting.
+The chart supplies the HTTPS endpoint, `MODEL_DEPLOYMENT_NAME` alias and
+`MODEL_API_KEY_SECRET_URI`; application values declare only
+`components.worker.gatewayAccess.policy: documents`. Generation requires explicit
+`MODEL_CONNECTION_MODE=gateway` and `MODEL_AUTH_METHOD=api_key`. Missing or denied
+credentials and gateway failures never select a direct provider connection.
+
+Chat Completions, strict schemas, the approved GPT version, 45-second request
+limit and durable per-review budgets remain. SDK retries are disabled; existing
+worker retry/attempt accounting remains authoritative. Returned model/version and
+usage are retained in the evidence record. The application has no embedding calls
+or vector retrieval. Saved reviews, SQL migrations and Blob objects are unchanged.
+
+Gateway rollout depends on validated shared client, chart and platform revisions.
+Source/CI checks alone do not establish live authorization or accounting. The
+joint SRE/document cutover owns provider permission removal after both consumers
+pass acceptance; this application does not remove grants or fall back to Foundry.
 
 ## API contract
 

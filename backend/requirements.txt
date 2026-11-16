@@ -6,6 +6,7 @@ asgiref==3.13.0
 attrs==26.1.0
 azure-core==1.41.0
 azure-identity==1.27.0
+azure-keyvault-secrets==4.12.0
 azure-storage-blob==12.31.1
 certifi==2026.10.23
 cffi==2.1.1
@@ -16,7 +17,9 @@ cryptography==50.0.2
 fastapi==0.163.0
 googleapis-common-protos==1.76.0
 h11==0.16.0
+httpcore==1.0.9
 httpcore2==2.16.0
+httpx==0.28.1
 httpx2==2.16.0
 idna==3.20
 isodate==0.7.2
@@ -33,6 +36,7 @@ opentelemetry-proto==1.45.2
 opentelemetry-sdk==1.45.2
 opentelemetry-semantic-conventions==0.66b2
 packaging==26.3
+portfolio-agent-runtime @ https://github.com/ai-platform-portfolio/application-library/releases/download/agent-runtime-v0.1.7/portfolio_agent_runtime-0.1.7-py3-none-any.whl#sha256=710276ae1d8326d8b80d209670fd0e0e4e03c7ce776261fbb33b220b8ddae8d9
 procrastinate==3.10.0
 protobuf==7.36.2
 psycopg==3.3.6
@@ -43,6 +47,7 @@ pydantic==2.14.2
 pydantic_core==2.50.2
 PyJWT==2.15.1
 pypdf==7.0.1
+PyYAML==6.0.3
 python-dateutil==4.0.0
 requests==2.34.2
 sniffio==1.3.1

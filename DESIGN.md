@@ -122,6 +122,24 @@ result. Reprocessing creates a new run rather than rewriting historical evidence
 Exact transitions, uniqueness constraints and cancellation behaviour are the
 first schema/API design task.
 
+## Inference authorization boundary
+
+Document processing consumes the shared LiteLLM client and chart gateway policy.
+Its dedicated worker identity retains data access and reads only its scoped active
+Key Vault credential; the gateway owns provider authorization. The policy pins the
+existing compatible GPT route and separates document model permissions/accounting
+from SRE. No provider credentials, credential issuer or infrastructure templates
+live in this application. Gateway failures fail closed.
+
+Keep Chat Completions and strict output schemas unchanged. The durable review
+binds the requested alias and actual returned model so a model change cannot
+silently mix results within a review. Existing attempts, input/output ceilings,
+request timeout and safe exception handling remain. Evidence selection is
+currently deterministic; this cutover introduces no embeddings or retrieval change.
+Shared provider grants are removed only in the coordinated platform cutover after
+both consumers are validated. An application configuration change alone is not
+proof that direct provider access is denied.
+
 ## Retrieval and model decisions
 
 Group numerical claims by compatible entity, metric and period; application code

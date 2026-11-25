@@ -476,10 +476,17 @@ class IntegrationTests(unittest.TestCase):
         with psycopg.connect(self.runtime_url) as c:
             self.assertEqual(
                 c.execute(
-                    "SELECT count(*) FROM public.inference_attempts WHERE review_id=%s",
+                    "SELECT step FROM public.inference_attempts WHERE review_id=%s",
                     (review["id"],),
-                ).fetchone()[0],
-                3,
+                ).fetchall(),
+                [("pair",)],
+            )
+            self.assertEqual(
+                c.execute(
+                    "SELECT step FROM public.review_steps WHERE review_id=%s ORDER BY step",
+                    (review["id"],),
+                ).fetchall(),
+                [("narrative",), ("report",), ("summary",)],
             )
             # A repeated delivered job must reuse terminal publication without another inference.
             producer.configure_task(
@@ -492,7 +499,7 @@ class IntegrationTests(unittest.TestCase):
                     "SELECT count(*) FROM public.inference_attempts WHERE review_id=%s",
                     (review["id"],),
                 ).fetchone()[0],
-                3,
+                1,
             )
         worker.terminate()
         worker.wait(timeout=15)
@@ -549,7 +556,7 @@ class IntegrationTests(unittest.TestCase):
                     ).fetchone()
                 self.assertEqual(
                     attempts,
-                    {"rate": (3, 3), "schema": (1, 1)}[failure],
+                    {"rate": (3, 3), "schema": (2, 1)}[failure],
                 )
 
     def test_exhausted_evidence_preserves_independent_narrative(self):
@@ -567,7 +574,7 @@ class IntegrationTests(unittest.TestCase):
         )
         status, evidence = self.request(path + "/evidence")
         self.assertEqual(status, 200)
-        self.assertEqual(evidence["run"]["model_calls"], 5)
+        self.assertEqual(evidence["run"]["model_calls"], 6)
         self.assertEqual(evidence["run"]["worker_attempts"], 1)
         numeric_steps = [
             s["output"] for s in evidence["steps"] if s["step"] in {"report", "summary"}
@@ -588,8 +595,8 @@ class IntegrationTests(unittest.TestCase):
         worker.wait(timeout=15)
         status, evidence = self.request("/api/reviews/" + review["id"] + "/evidence")
         self.assertEqual(status, 200)
-        self.assertEqual(evidence["run"]["model_calls"], 5)
-        self.assertEqual(evidence["usage"]["known_output_tokens"], 250)
+        self.assertEqual(evidence["run"]["model_calls"], 6)
+        self.assertEqual(evidence["usage"]["known_output_tokens"], 300)
         self.assertEqual(len(evidence["steps"]), 3)
 
     def test_backpressure_rolls_back_unaccepted_work(self):
@@ -691,9 +698,29 @@ def fixture_runtime():
         def __exit__(self, *args):
             return False
 
-        def create(self, **kwargs):
+        @staticmethod
+        def extract(text, *, bad_quote):
             import re
 
+            match = re.search(r"revenue (\d+)", text)
+            if match is None:
+                return {"claims": []}
+            return {
+                "claims": [
+                    {
+                        "metric": "revenue",
+                        "value": match[1],
+                        "entity": "Example Ltd",
+                        "period": "2025",
+                        "currency": "GBP",
+                        "scale": "units",
+                        "basis": "statutory",
+                        "evidence": {"page": 1, "quote": "Unsupported paraphrase" if bad_quote else text},
+                    }
+                ]
+            }
+
+        def create(self, **kwargs):
             inputs = json.loads(kwargs["messages"][1]["content"])
             time.sleep(float(os.environ.get("FIXTURE_MODEL_DELAY", "0")))
             failure = os.environ.get("FIXTURE_MODEL_FAILURE", "")
@@ -709,30 +736,22 @@ def fixture_runtime():
                     body={},
                 )
             if "pages" in inputs:
-                text = inputs["pages"][0]
-                match = re.search(r"revenue (\d+)", text)
-                value = match[1] if match else None
-                output = {
-                    "claims": [
-                        {
-                            "metric": "revenue",
-                            "value": value,
-                            "entity": "Example Ltd",
-                            "period": "2025",
-                            "currency": "GBP",
-                            "scale": "units",
-                            "basis": "statutory",
-                            "evidence": {"page": 1, "quote": text},
-                        }
-                    ]
-                }
-                if value is None:
-                    output = {"claims": []}
-                elif failure == "evidence" or (
-                    failure == "repair"
-                    and "(quote_not_on_page)" not in kwargs["messages"][0]["content"]
-                ):
-                    output["claims"][0]["evidence"]["quote"] = "Unsupported paraphrase"
+                output = self.extract(
+                    inputs["pages"][0],
+                    bad_quote=failure == "evidence" or (
+                        failure == "repair"
+                        and "(quote_not_on_page)" not in kwargs["messages"][0]["content"]
+                    ),
+                )
+            elif isinstance(inputs["report"], dict):
+                output = {}
+                for kind in ("report", "summary"):
+                    text = inputs[kind]["pages"][0]
+                    output[kind] = self.extract(text, bad_quote=failure in {"evidence", "repair"})
+                    output[kind + "_margin"] = {
+                        "direction": "declined" if "declined" in text else "improved",
+                        "evidence": {"page": 1, "quote": text},
+                    }
             else:
                 report_text = inputs["report"][0]["text"]
                 summary_text = inputs["summary"][0]["text"]

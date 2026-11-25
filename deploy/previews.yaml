@@ -2,4 +2,4 @@ platform:
   argocd:
     previews:
       enabled: true
-      generateHostname: false
+      generateHostname: true

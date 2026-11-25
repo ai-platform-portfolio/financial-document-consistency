@@ -422,3 +422,5 @@ The interface is plain HTML/CSS/JavaScript served from the API image, with a
 same-origin content policy and text-only rendering of document/model content.
 No frontend build service, framework or extra runtime image is needed. Request
 retries reuse upload IDs and the review idempotency key for the selected pair.
+
+Gateway acceptance preview: temporary synthetic end-to-end verification (AI-256).

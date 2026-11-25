@@ -17,7 +17,7 @@ concurrency:
 env:
   ATLAS_NO_ANON_TELEMETRY: 'true'
   ATLAS_NO_UPDATE_NOTIFIER: 'true'
-  APPLICATION_CHART_REVISION: e8053eba011a9fe28fec997d723b20670795bac8 # native gateway credentials and exact reader cleanup
+  APPLICATION_CHART_REVISION: 2b1c1af49f7fb9a6cdbed1792e119fc16c90469c # bounded gateway renewal CronJob names
 
 jobs:
   source:

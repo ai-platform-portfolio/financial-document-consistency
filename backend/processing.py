@@ -18,7 +18,7 @@ from openai import (
     RateLimitError,
     InternalServerError,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from psycopg.types.json import Jsonb
 from portfolio_agent_runtime.agent import model_client, model_settings
 
@@ -29,9 +29,17 @@ from telemetry import tracer, event
 
 
 PROMPT = "financial-evidence-v4"
+PAIR_PROMPT = (
+    ". For the paired schema, extract the report and summary claims separately, keeping each quote in its own document. "
+    "Also extract one margin-direction statement per document. Treat margin synonyms or percentage-of-sales language "
+    "as margin where explicit. Return direction improved, declined, unchanged, or unclear. Copy an exact contiguous "
+    "page quote. Use unclear and null when there is no statement or the direction is ambiguous. "
+    "Do not compare the documents or calculate differences; return the two independent extractions."
+)
 PROFILE = "financial-v1"
 MAX_CALLS = 12
 MAX_INPUT_BYTES = 96000
+MAX_REQUEST_BYTES = 32000
 MAX_OUTPUT_TOKENS = 3000
 NARRATIVE_CONTEXT_BYTES = 8000
 NUMBER = re.compile(r"[-+−]?\d+(?:,\d{3})*(?:\.\d+)?")
@@ -39,6 +47,7 @@ MARGIN_LANGUAGE = re.compile(
     r"\bmargins?\b|\bprofit as a (?:share|percentage|proportion) of (?:sales|revenue)\b",
     re.IGNORECASE,
 )
+MARGIN_QUALIFIER = re.compile(r"\b(gross|operating|net) (?:profit|margin)\b", re.IGNORECASE)
 FISCAL_YEAR = re.compile(
     r"\b(?:FY\s*|(?:fiscal\s+)?year\s+)((?:19|20)\d{2})\b"
     r"|\b((?:19|20)\d{2})(?=\s+statutory\b)",
@@ -65,6 +74,10 @@ class TransientProcessingError(Exception):
 
 class UnsupportedClaimEvidence(ValueError):
     """A fixed reason code, safe to record without document or model text."""
+
+
+class TruncatedModelOutput(ValueError):
+    """The provider reached the output token limit."""
 
 
 RETRYABLE = (
@@ -108,6 +121,20 @@ class Narrative(BaseModel):
     summary_evidence: Evidence | None
 
 
+class MarginStatement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    direction: Literal["improved", "declined", "unchanged", "unclear"]
+    evidence: Evidence | None
+
+
+class PairedExtraction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    report: Claims
+    summary: Claims
+    report_margin: MarginStatement
+    summary_margin: MarginStatement
+
+
 CONFIG = hashlib.sha256(
     json.dumps(
         {
@@ -116,6 +143,8 @@ CONFIG = hashlib.sha256(
             "revision": os.environ.get("APPLICATION_REVISION", "local"),
             "claims": Claims.model_json_schema(),
             "narrative": Narrative.model_json_schema(),
+            "paired": PairedExtraction.model_json_schema(),
+            "paired_prompt": PAIR_PROMPT,
             "numeric_tolerance": "absolute 0.01 in normalized units; margin 0.1 percentage points",
         },
         sort_keys=True,
@@ -351,6 +380,55 @@ def compare_narrative(review_id, pages):
     return narrative
 
 
+def extract_pair(review_id, pages):
+    inputs = {kind: {"pages": text} for kind, text in pages.items()}
+    pair_size = len(json.dumps(inputs, ensure_ascii=False).encode())
+    # Leave room for the existing flow, including one claim repair per document.
+    fallback_size = 2 * sum(
+        len(json.dumps(doc, ensure_ascii=False).encode()) for doc in inputs.values()
+    )
+    fallback_size += len(json.dumps(narrative_inputs(pages), ensure_ascii=False).encode())
+    if pair_size > MAX_REQUEST_BYTES or pair_size + fallback_size > MAX_INPUT_BYTES:
+        return None
+    try:
+        pair = infer(review_id, "pair", PairedExtraction, inputs)
+        claims = {"report": pair.report, "summary": pair.summary}
+        for kind, result in claims.items():
+            validate_claims(result, pages[kind])
+            if not result.claims:
+                return None
+        report_entities = {claim.entity.casefold().strip() for claim in pair.report.claims}
+        summary_entities = {claim.entity.casefold().strip() for claim in pair.summary.claims}
+        if len(report_entities) != 1 or report_entities != summary_entities:
+            return None
+        report, summary = pair.report_margin, pair.summary_margin
+        if "unclear" in (report.direction, summary.direction) or not (
+            evidence_valid(report.evidence, pages["report"])
+            and evidence_valid(summary.evidence, pages["summary"])
+        ):
+            return None
+        report_qualifiers = set(MARGIN_QUALIFIER.findall(report.evidence.quote.lower()))
+        summary_qualifiers = set(MARGIN_QUALIFIER.findall(summary.evidence.quote.lower()))
+        if len(report_qualifiers) > 1 or report_qualifiers != summary_qualifiers:
+            return None
+        narrative = validate_narrative(
+            Narrative(
+                classification="consistent" if report.direction == summary.direction else "issue",
+                explanation=f"Report margin direction is {report.direction}; summary margin direction is {summary.direction}.",
+                report_evidence=report.evidence,
+                summary_evidence=summary.evidence,
+            ),
+            pages,
+        )
+    except (UnsupportedClaimEvidence, ValidationError, TruncatedModelOutput):
+        return None
+    save_steps(
+        review_id,
+        {kind: step.model_dump() for kind, step in {**claims, "narrative": narrative}.items()},
+    )
+    return claims, narrative
+
+
 def infer(review_id, step, model_type, inputs, *, repair_reason=None):
     """Reserve a durable attempt before the call; never hold a SQL connection during inference."""
     if (
@@ -363,7 +441,7 @@ def infer(review_id, step, model_type, inputs, *, repair_reason=None):
     deployment = settings["MODEL_DEPLOYMENT_NAME"]
     payload = json.dumps(inputs, ensure_ascii=False)
     size = len(payload.encode())
-    if size > 32000:
+    if size > MAX_REQUEST_BYTES:
         raise ValueError("Inference input exceeds limit")
     with connect() as c:
         run = c.execute(
@@ -420,6 +498,7 @@ def infer(review_id, step, model_type, inputs, *, repair_reason=None):
                             "In value remove grouping separators, but keep the sign and decimal. "
                             "Do not convert scale; record it separately. Omit direction-only margin as a number. "
                             + PROMPT
+                            + (PAIR_PROMPT if step == "pair" else "")
                             + (
                                 " In the narrative input, fiscal_years is worker-derived "
                                 "document metadata. If a margin statement has no explicit "
@@ -449,9 +528,9 @@ def infer(review_id, step, model_type, inputs, *, repair_reason=None):
                     },
                 },
             )
-        if (
-            response.choices[0].finish_reason != "stop"
-            or not response.choices[0].message.content
+        choice = response.choices[0]
+        if choice.finish_reason != "length" and (
+            choice.finish_reason != "stop" or not choice.message.content
         ):
             raise ValueError("Incomplete or refused model output")
         usage = response.usage
@@ -491,7 +570,9 @@ def infer(review_id, step, model_type, inputs, *, repair_reason=None):
                     attempt,
                 ),
             )
-        return model_type.model_validate_json(response.choices[0].message.content)
+        if choice.finish_reason == "length":
+            raise TruncatedModelOutput("Model output exceeded the token limit")
+        return model_type.model_validate_json(choice.message.content)
 
 
 def load_step(review_id, step):
@@ -503,13 +584,17 @@ def load_step(review_id, step):
     return row["output"] if row else None
 
 
-def save_step(review_id, step, output):
-    with connect() as c:
-        c.execute(
+def save_steps(review_id, steps):
+    with connect() as c, c.cursor() as cursor:
+        cursor.executemany(
             "INSERT INTO public.review_steps (review_id,step,config_hash,output) VALUES (%s,%s,%s,%s) "
             "ON CONFLICT DO NOTHING",
-            (review_id, step, CONFIG, Jsonb(output)),
+            [(review_id, step, CONFIG, Jsonb(output)) for step, output in steps.items()],
         )
+
+
+def save_step(review_id, step, output):
+    save_steps(review_id, {step: output})
 
 
 def process_review(review_id):
@@ -561,7 +646,6 @@ def _process_review(review_id):
     try:
         store = BlobStore()
         pages = {}
-        claims = {}
         for doc in docs:
             if not doc["verified"]:
                 raise ValueError("Unverified document")
@@ -575,14 +659,21 @@ def _process_review(review_id):
                 json.dumps(pages[kind]).encode(),
                 "application/json",
             )
-            claims[kind] = extract_claims(review_id, kind, pages[kind])
-        if set(claims) != {"report", "summary"}:
+        if set(pages) != {"report", "summary"}:
             raise ValueError("Missing document pair")
+        # Retried jobs reuse committed steps or continue through the existing flow.
+        paired = extract_pair(review_id, pages) if run["worker_attempts"] == 1 else None
+        if paired is None:
+            claims = {
+                kind: extract_claims(review_id, kind, text) for kind, text in pages.items()
+            }
+            narrative = compare_narrative(review_id, pages)
+        else:
+            claims, narrative = paired
         invalid = sorted(kind for kind, result in claims.items() if result is None)
         findings = (
             [] if invalid else compare_claims(claims["report"], claims["summary"])
         )
-        narrative = compare_narrative(review_id, pages)
         findings.append({"check": "narrative", **narrative.model_dump()})
         if invalid or any(not result.claims for result in claims.values()):
             findings.append(

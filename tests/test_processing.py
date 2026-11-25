@@ -15,7 +15,10 @@ from processing import (
     Claims,
     Evidence,
     Narrative,
+    PairedExtraction,
+    TruncatedModelOutput,
     UnsupportedClaimEvidence,
+    extract_pair,
     narrative_context,
     narrative_inputs,
     validate_narrative,
@@ -152,6 +155,54 @@ class GatewayTests(unittest.TestCase):
 
 
 class ProcessingTests(unittest.TestCase):
+    def test_pair_validates_each_document_and_saves_existing_evidence_steps(self):
+        pages = {
+            "report": ["FY2025 revenue 100. Gross margin declined."],
+            "summary": ["FY2025 revenue 110. Gross profit as a share of sales improved."],
+        }
+        pair = PairedExtraction.model_validate({
+            "report": {"claims": [claim()]},
+            "summary": {"claims": [claim(value="110")]},
+            "report_margin": {
+                "direction": "declined",
+                "evidence": {"page": 1, "quote": "Gross margin declined."},
+            },
+            "summary_margin": {
+                "direction": "improved",
+                "evidence": {"page": 1, "quote": "Gross profit as a share of sales improved."},
+            },
+        })
+        with patch("processing.infer", return_value=pair) as infer, patch("processing.save_steps") as save:
+            claims, narrative = extract_pair("review", pages)
+            self.assertEqual(narrative.classification, "issue")
+            self.assertEqual(compare_claims(claims["report"], claims["summary"])[0]["classification"], "issue")
+            infer.assert_called_once_with(
+                "review", "pair", PairedExtraction,
+                {kind: {"pages": text} for kind, text in pages.items()},
+            )
+            save.assert_called_once()
+            self.assertEqual(set(save.call_args.args[1]), {"report", "summary", "narrative"})
+
+            pages["summary"][0] = pages["summary"][0].replace("FY2025", "FY2024")
+            self.assertEqual(extract_pair("review", pages)[1].classification, "unresolved")
+
+            # A quote drawn from the opposite PDF cannot publish either document's steps.
+            save.reset_mock()
+            pair.summary.claims[0].evidence.quote = "revenue 100"
+            self.assertIsNone(extract_pair("review", pages))
+            save.assert_not_called()
+
+    def test_pair_preserves_room_for_fallback_and_handles_truncated_output(self):
+        with patch("processing.infer", side_effect=TruncatedModelOutput) as infer, patch(
+            "processing.save_steps"
+        ) as save:
+            for size in (16000, 15950):
+                self.assertIsNone(extract_pair("review", {"report": ["a" * size], "summary": ["b" * size]}))
+            infer.assert_not_called()
+            self.assertIsNone(extract_pair("review", {"report": ["FY2025"], "summary": ["FY2025"]}))
+            infer.assert_called_once()
+            save.assert_not_called()
+
     def test_labelled_numerical_cases(self):
         cases = json.loads((ROOT / "tests/evaluation_cases.json").read_text())[
             "numeric"
